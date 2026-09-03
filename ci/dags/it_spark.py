@@ -7,11 +7,15 @@ apache-airflow-providers-cncf-kubernetes releases. This DAG is verified against 
 provider version by e2e-kind.yaml, which actually submits and waits for both SparkApplications -
 treat a CI failure here as this file needing an update for the current provider API, not a flake.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from airflow import DAG
-from airflow.providers.cncf.kubernetes.operators.spark_kubernetes import SparkKubernetesOperator
-from airflow.providers.cncf.kubernetes.sensors.spark_kubernetes import SparkKubernetesSensor
+from airflow.providers.cncf.kubernetes.operators.spark_kubernetes import (
+    SparkKubernetesOperator,
+)
+from airflow.providers.cncf.kubernetes.sensors.spark_kubernetes import (
+    SparkKubernetesSensor,
+)
 
 TENANT = "tenant-ci"
 NAMESPACE = f"{TENANT}-workloads"
@@ -23,7 +27,7 @@ with DAG(
     schedule=None,
     catchup=False,
     max_active_runs=1,
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
     default_args={"retries": 0},
     tags=["integration-test", TENANT],
     params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT},

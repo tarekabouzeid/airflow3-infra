@@ -4,7 +4,7 @@ backend - see docs/architecture.md). Both tasks read a value from the ESO-synced
 "<tenant>-workload-secrets" Secret, which proves the full Vault -> ExternalSecret -> pod path in
 both clusters with a single DAG run.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from airflow import DAG
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
@@ -28,7 +28,7 @@ with DAG(
     schedule=None,
     catchup=False,
     max_active_runs=1,
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2025, 1, 1, tzinfo=timezone.utc),
     default_args={"retries": 0},
     tags=["integration-test", TENANT],
 ) as dag:

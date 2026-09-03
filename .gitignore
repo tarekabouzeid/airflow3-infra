@@ -5,3 +5,5 @@
 *.retry
 charts/*/charts/*.tgz
 charts/*/Chart.lock
+__pycache__/
+*.pyc
