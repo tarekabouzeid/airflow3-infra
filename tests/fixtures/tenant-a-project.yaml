@@ -1,0 +1,7 @@
+scope: project
+tenant: tenant-a
+platformRepoURL: https://github.com/tarekabouzeid/airflow3-infra
+tenantRepoURL: https://github.com/tarekabouzeid/airflow3-infra-tenant-a
+destinations:
+  - server: "*"
+    namespace: "tenant-a-*"

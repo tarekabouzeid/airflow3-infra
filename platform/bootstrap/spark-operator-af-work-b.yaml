@@ -1,0 +1,44 @@
+# Kubeflow Spark Operator: lets tenants submit SparkApplication CRs, run on every workload cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: spark-operator-af-work-b
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://kubeflow.github.io/spark-operator
+    chart: spark-operator
+    targetRevision: "2.1.1"   # verified by CI against the real chart index; see versions.env
+    helm:
+      values: |
+        spark:
+          jobNamespaces:
+            - tenant-a-workloads
+            - tenant-b-workloads
+        webhook:
+          enable: false
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+  destination:
+    server: https://af-work-b-control-plane:6443
+    namespace: spark-operator
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

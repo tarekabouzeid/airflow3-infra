@@ -1,0 +1,66 @@
+# scope selects which set of templates render:
+#   "project"   -> a single Argo CD AppProject (apply to the Argo CD control-plane cluster only)
+#   "namespace" -> Namespace + ResourceQuota + LimitRange + NetworkPolicy + RBAC for ONE namespace
+scope: project
+
+tenant: tenant-a
+
+# --- scope: project ---
+argocdNamespace: argocd
+platformRepoURL: https://github.com/tarekabouzeid/airflow3-infra
+tenantRepoURL: https://github.com/tarekabouzeid/airflow3-infra-tenant-a
+# Every (cluster server, namespace) pair this tenant's Applications are allowed to deploy into.
+destinations:
+  - server: https://af-work-a-control-plane:6443
+    namespace: tenant-a-airflow
+  - server: https://af-work-a-control-plane:6443
+    namespace: tenant-a-workloads
+  - server: https://af-work-b-control-plane:6443
+    namespace: tenant-a-workloads
+# Resource kinds tenants are explicitly forbidden from touching in their own namespaces,
+# even though the namespace itself is theirs. Platform-owned guardrails.
+namespaceResourceBlacklist:
+  - group: ""
+    kind: ResourceQuota
+  - group: ""
+    kind: LimitRange
+  - group: networking.k8s.io
+    kind: NetworkPolicy
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRole
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRoleBinding
+
+# --- scope: namespace ---
+namespace: tenant-a-airflow
+# Extra namespaces in the SAME cluster this namespace's pods are allowed to reach
+# (e.g. tenant-a-airflow needs no cross-namespace traffic; tenant-a-workloads doesn't either -
+# Airflow talks to remote clusters over the k8s API, not pod-to-pod).
+networkPolicy:
+  allowSameNamespace: true
+  allowDNSEgress: true
+  allowKubeAPIEgress: true
+  extraEgressNamespaceSelectors: []
+quota:
+  requests.cpu: "2"
+  requests.memory: 4Gi
+  limits.cpu: "4"
+  limits.memory: 8Gi
+  pods: "20"
+limitRange:
+  defaultRequestCPU: 100m
+  defaultRequestMemory: 128Mi
+  defaultLimitCPU: "1"
+  defaultLimitMemory: 1Gi
+
+# --- scope: namespace, workloads namespaces only ---
+# Set true only for namespaces where Airflow tasks (KubernetesPodOperator / SparkKubernetesOperator)
+# actually land: "<tenant>-workloads" on every cluster the tenant targets (home + remote).
+isWorkloadNamespace: false
+workloadRunnerServiceAccount: tenant-a-workload-runner
+# Set only on the HOME cluster's workloads namespace, so the in-cluster Airflow identity can
+# reach it via a plain RoleBinding (no token needed - same cluster, cross-namespace).
+# Leave empty on remote clusters: there, scripts/70-remote-access.sh mints a token for
+# workloadRunnerServiceAccount and stores it (as a kubeconfig) in Vault instead.
+localAirflowServiceAccountNamespace: ""
+localAirflowServiceAccountName: ""

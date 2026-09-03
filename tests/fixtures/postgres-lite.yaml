@@ -1,0 +1,3 @@
+existingSecret: tenant-a-postgres-credentials
+global:
+  tenant: tenant-a

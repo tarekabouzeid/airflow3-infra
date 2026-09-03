@@ -1,0 +1,39 @@
+name: policy
+
+on:
+  pull_request:
+  push:
+    branches: [main, "claude/**"]
+
+jobs:
+  conftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: install conftest
+        run: |
+          curl -sSL https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_Linux_x86_64.tar.gz | tar xz
+          sudo mv conftest /usr/local/bin/
+      - name: add chart repos
+        run: |
+          source versions.env
+          helm repo add apache-airflow "${AIRFLOW_CHART_REPO}"
+          helm repo update
+      - name: render everything
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/render
+          helm template p1 charts/tenant-project -f tests/fixtures/tenant-a-project.yaml > /tmp/render/project.yaml
+          helm template p2 charts/tenant-project -f tests/fixtures/tenant-a-airflow-ns.yaml > /tmp/render/airflow-ns.yaml
+          helm template p3 charts/tenant-project -f tests/fixtures/tenant-a-workloads-ns.yaml > /tmp/render/workloads-ns.yaml
+          helm dependency build charts/airflow-tenant
+          helm template p4 charts/airflow-tenant -f tests/fixtures/tenant-a-airflow.yaml > /tmp/render/airflow.yaml
+      - name: policy check - rendered charts
+        run: conftest test --policy tests/policy /tmp/render/*.yaml
+      - name: policy check - static platform Applications
+        run: conftest test --policy tests/policy platform/bootstrap/*.yaml
+        # Note: ApplicationSet-generated tenant Applications (tenant-airflow, tenant-workloads,
+        # tenant-projects) are goTemplate manifests, not real objects, until Argo CD renders them
+        # against a live tenant registry entry - those are validated for real in e2e-kind.yaml
+        # instead of here.

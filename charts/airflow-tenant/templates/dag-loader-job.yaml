@@ -1,0 +1,58 @@
+{{- if .Values.dagLoader.enabled }}
+# Runs after every sync (PostSync hook): shallow-clones the tenant's repo and copies its dags/
+# directory onto the shared PVC. No git-sync sidecars - `git push` to the tenant repo, then an
+# Argo CD sync (automated or manual), refreshes the DAGs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.tenant }}-dag-loader
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "airflow-tenant.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: {{ .Values.dagLoader.hookDeletePolicy }}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "airflow-tenant.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccountName }}
+      containers:
+        - name: dag-loader
+          image: {{ .Values.dagLoader.image }}
+          env:
+            - name: GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tenant }}-git-token
+                  key: token
+            - name: REPO_URL
+              value: {{ .Values.tenantRepo.url | quote }}
+            - name: REPO_BRANCH
+              value: {{ .Values.tenantRepo.branch | quote }}
+            - name: DAGS_PATH
+              value: {{ .Values.tenantRepo.dagsPath | quote }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              AUTH_URL=$(echo "$REPO_URL" | sed "s#https://#https://x-access-token:${GIT_TOKEN}@#")
+              rm -rf /tmp/tenant-repo
+              git clone --depth 1 --branch "$REPO_BRANCH" "$AUTH_URL" /tmp/tenant-repo
+              mkdir -p /dags
+              find /dags -mindepth 1 -delete
+              cp -r "/tmp/tenant-repo/${DAGS_PATH}/." /dags/
+              echo "DAGs loaded:"
+              ls -la /dags
+          volumeMounts:
+            - name: dags
+              mountPath: /dags
+      volumes:
+        - name: dags
+          persistentVolumeClaim:
+            claimName: {{ .Values.tenant }}-dags
+{{- end }}

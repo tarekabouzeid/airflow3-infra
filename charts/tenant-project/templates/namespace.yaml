@@ -1,0 +1,9 @@
+{{- if eq .Values.scope "namespace" }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+    platform.tenant-namespace: "true"
+{{- end }}

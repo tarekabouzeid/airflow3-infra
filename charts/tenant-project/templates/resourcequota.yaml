@@ -1,0 +1,12 @@
+{{- if eq .Values.scope "namespace" }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ .Values.tenant }}-quota
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.quota | nindent 4 }}
+{{- end }}

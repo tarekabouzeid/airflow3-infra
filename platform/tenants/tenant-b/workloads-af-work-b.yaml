@@ -1,0 +1,13 @@
+tenant: tenant-b
+tenantRepoURL: https://github.com/tarekabouzeid/airflow3-infra-tenant-b
+tenantRepoBranch: main
+cluster:
+  name: af-work-b
+  server: https://af-work-b-control-plane:6443
+  vaultAuthMountPath: kubernetes-work-b
+vault:
+  mountPoint: tenant-b
+  esoRole: tenant-b-eso
+isLocal: true
+localAirflowServiceAccountNamespace: tenant-b-airflow
+localAirflowServiceAccountName: tenant-b-airflow

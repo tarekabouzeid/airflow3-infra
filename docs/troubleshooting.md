@@ -1,0 +1,55 @@
+# Troubleshooting
+
+**A tenant Application is stuck `Progressing` or `Degraded` right after bootstrap.**
+Expected until `make vault-configure` (and `make seed-tenant-secrets`) have run: the tenant's
+`SecretStore` can't authenticate to Vault yet, so its `ExternalSecret`s never become Ready, so the
+Postgres/Airflow pods that depend on those Secrets never start. `selfHeal: true` means once Vault
+is configured, everything catches up on its own within a few minutes - no manual resync needed.
+
+**`vault status` says sealed after a cluster restart.**
+Vault does not auto-unseal (this is deliberate - see `docs/architecture.md`). Run
+`make vault-init` again; it detects Vault is already initialized and only performs the unseal
+step, using the key in `.local/vault-keys.json`. If that file is missing, Vault is unrecoverable -
+delete the `vault` PVC and re-run `make vault-init` from scratch (you will lose all secrets and
+need to re-run `make vault-configure` and `make seed-tenant-secrets` too).
+
+**Cross-cluster addresses like `af-work-b-control-plane:6443` don't resolve from a pod.**
+Confirm all 3 clusters' control-plane containers are actually on the shared `kind` Docker
+network: `docker network inspect kind --format '{{range .Containers}}{{.Name}} {{end}}'`. If one
+is missing, it was likely created before the `kind` network existed, or with a different
+`--network` override - recreate that cluster.
+
+**A dag-loader Job fails with a git auth error.**
+`GITHUB_TOKEN` wasn't seeded (`make seed-tenant-secrets`), the token expired, or it lacks read
+access to the tenant repo. Check `<tenant>/git` in Vault
+(`kubectl -n vault exec -i vault-0 -- vault kv get <tenant>/git`) and the ExternalSecret status
+(`kubectl -n <tenant>-airflow get externalsecret <tenant>-git-token -o yaml`).
+
+**`airflow dags list-import-errors` shows an error for a KubernetesPodOperator/
+SparkKubernetesOperator DAG.**
+Almost always a provider-version API mismatch, not a logic bug - both operators' constructor
+arguments have changed across `apache-airflow-providers-cncf-kubernetes` releases, and this repo
+was built without the ability to run the real provider locally to verify exact argument names
+(see `docs/IMPLEMENTATION_PLAN.md`'s Rule 0). Check the installed provider version
+(`airflow providers list`) against
+`https://airflow.apache.org/docs/apache-airflow-providers-cncf-kubernetes/stable/_api/airflow/providers/cncf/kubernetes/operators/`
+and adjust the DAG.
+
+**A `KubernetesPodOperator`/`SparkKubernetesOperator` task with `kubernetes_conn_id="k8s_remote"`
+fails to authenticate.**
+Re-run `make remote-access` - the token minted for `<tenant>-workload-runner` is long-lived but
+not eternal, and re-running is idempotent (it overwrites the Vault connection with a fresh
+token). If the workload-runner ServiceAccount itself is missing, its owning Application
+(`<tenant>-workloads-<cluster>`) hasn't synced yet on that cluster.
+
+**Argo CD Application flips to `Unknown` health mid Argo-CD-upgrade.**
+Expected - see `docs/runbook-argocd-upgrade.md`. The application-controller restarts itself
+during its own upgrade. Give it a few minutes before treating it as a real failure.
+
+**GitHub Actions `e2e-kind.yaml` fails on a `kubectl rollout status deployment/tenant-ci-airflow-*`
+step with "not found".**
+The official `apache-airflow/airflow` chart's exact resource-naming convention was not verified
+against a live render before this workflow was written (no local Helm/registry access - see
+`docs/IMPLEMENTATION_PLAN.md`'s Rule 0). Check the actual generated names with
+`kubectl -n tenant-ci-airflow get deployments` in the failed run's logs and fix the step name,
+rather than assuming the DAG/chart logic itself is wrong.

@@ -1,0 +1,116 @@
+# Platform defaults for a tenant's Airflow 3 deployment. The tenant repo's
+# deploy/airflow/values.yaml overrides a SMALL subset of this (image tag, resources, which
+# clusters it targets) via the Argo CD multi-source Application - it cannot change the shape
+# (executor, secrets backend wiring, DAG delivery mechanism).
+
+tenant: tenant-a
+clusterName: af-work-a   # the cluster THIS Airflow instance runs on (used for Vault auth-mount naming)
+
+global:
+  tenant: tenant-a   # propagated to the postgres-lite subchart
+
+vault:
+  address: http://af-mgmt-control-plane:8200
+  # KV-v2 mount holding this tenant's connections/variables (see scripts/60-vault-configure.sh)
+  mountPoint: tenant-a
+  # Vault Kubernetes auth mount specific to `clusterName` above - one mount per cluster.
+  authMountPath: kubernetes-work-a
+  airflowRole: tenant-a-airflow
+  esoRole: tenant-a-eso
+
+tenantRepo:
+  url: https://github.com/tarekabouzeid/airflow3-infra-tenant-a
+  branch: main
+  dagsPath: dags
+
+image:
+  repository: localhost:5001/airflow-tenant
+  tag: 3.1.7-hashicorp-1   # built by images/airflow/Dockerfile, pushed by `make images`
+  pullPolicy: IfNotPresent
+
+dags:
+  pvcSize: 1Gi
+  storageClassName: standard
+
+logs:
+  pvcSize: 2Gi
+  storageClassName: standard
+
+dagLoader:
+  # Disabled only by the CI smoke test (e2e-kind.yaml), which seeds the DAGs PVC directly via
+  # `kubectl cp` instead of cloning a (there, nonexistent) tenant git repo. Always true for a real
+  # tenant deployment.
+  enabled: true
+  image: alpine/git:2.45.2
+  # BeforeHookCreation: a stale loader Job from a previous sync is deleted before the new one
+  # runs, so `git push` to the tenant repo -> Argo CD sync -> fresh DAGs, every time.
+  hookDeletePolicy: BeforeHookCreation
+
+serviceAccountName: tenant-a-airflow
+
+# --- passed straight through to the apache-airflow/airflow subchart (alias: airflow) ---
+# Keys verified against `helm show values apache-airflow/airflow --version <pinned>` in CI
+# (.github/workflows/lint.yaml). If a key here doesn't show up in the rendered manifests,
+# treat that as this file being wrong, not the chart.
+airflow:
+  executor: KubernetesExecutor
+
+  images:
+    airflow:
+      repository: localhost:5001/airflow-tenant
+      tag: 3.1.7-hashicorp-1
+      pullPolicy: IfNotPresent
+
+  # We own the metadata DB via postgres-lite; disable the chart's bundled one. The connection
+  # string itself comes from a Secret (never inline plaintext here) built by
+  # templates/postgres-db-externalsecret.yaml from credentials ESO pulls out of Vault.
+  postgresql:
+    enabled: false
+  data:
+    metadataSecretName: tenant-a-airflow-metadata-conn
+
+  dags:
+    persistence:
+      enabled: true
+      existingClaim: tenant-a-dags
+      accessMode: ReadWriteOnce
+    gitSync:
+      enabled: false
+
+  logs:
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClassName: standard
+
+  # A single ServiceAccount name, pinned across every component, so one Vault Kubernetes-auth
+  # role can bind to it. `create: false` because templates/serviceaccount.yaml creates it once
+  # (Argo CD would otherwise fight over ownership between this subchart and a sibling app).
+  serviceAccount:
+    create: false
+    name: tenant-a-airflow
+
+  dagProcessor:
+    enabled: true
+
+  # Airflow 3's UI + REST API server (replaces the Airflow 2 "webserver" component name).
+  apiServer:
+    defaultUser:
+      enabled: false
+
+  triggerer:
+    enabled: true
+
+  webserver:
+    enabled: false
+
+  env:
+    - name: AIRFLOW__SECRETS__BACKEND
+      value: "airflow.providers.hashicorp.secrets.vault.VaultBackend"
+    - name: AIRFLOW__SECRETS__BACKEND_KWARGS
+      value: >-
+        {"connections_path":"connections","variables_path":"variables","config_path":null,
+        "mount_point":"tenant-a","auth_type":"kubernetes","kubernetes_role":"tenant-a-airflow",
+        "kubernetes_mount_point":"kubernetes-work-a","url":"http://af-mgmt-control-plane:8200"}
+
+  extraEnv: []

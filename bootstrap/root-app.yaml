@@ -1,0 +1,33 @@
+# The ONLY manifest applied imperatively (by scripts/30-install-argocd.sh, once). Everything
+# else - including Argo CD itself from here on - is reached by Argo CD syncing this Application,
+# which points at platform/bootstrap/: a small, static, platform-owned app-of-apps directory
+# containing the self-management Application and the tenant ApplicationSets.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/tarekabouzeid/airflow3-infra
+    targetRevision: main
+    path: platform/bootstrap
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: tenant-project
+description: >
+  Renders the Argo CD AppProject for a tenant (scope=project, applied once to the Argo CD
+  control-plane cluster) and the per-namespace guardrails - Namespace, ResourceQuota,
+  LimitRange, NetworkPolicy, RBAC - for a single tenant namespace on a single workload
+  cluster (scope=namespace, applied once per tenant per namespace).
+type: application
+version: 0.1.0
+appVersion: "1.0"

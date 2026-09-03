@@ -1,0 +1,43 @@
+# Argo CD manages itself. Upgrading Argo CD is then a GitOps action: bump targetRevision below,
+# commit, let this Application sync. See docs/runbook-argocd-upgrade.md for the full, safe
+# sequence (the app-controller restarts mid-sync; briefly seeing Progressing/Unknown here is
+# expected, not a failure).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  sources:
+    - repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-cd
+      # Start of the upgrade rehearsal: v2.14.x. See versions.env and docs/runbook-argocd-upgrade.md.
+      targetRevision: "7.8.28"
+      helm:
+        valueFiles:
+          - $values/bootstrap/argocd-values.yaml
+    - repoURL: https://github.com/tarekabouzeid/airflow3-infra
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # Argo CD's own CRDs exceed the client-side-apply annotation limit
+      - Replace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 5m

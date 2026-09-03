@@ -1,0 +1,2 @@
+apache-airflow-providers-hashicorp
+apache-airflow-providers-cncf-kubernetes

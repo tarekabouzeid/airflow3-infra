@@ -1,0 +1,23 @@
+nameOverride: postgres
+image:
+  repository: postgres
+  tag: "16-alpine"
+  pullPolicy: IfNotPresent
+# Must name a Secret (created elsewhere - by an ExternalSecret sourced from Vault; never plaintext
+# in values) with keys: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB.
+existingSecret: ""
+port: 5432
+storage:
+  size: 2Gi
+  storageClassName: standard
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Populated automatically when this chart is used as a dependency of charts/airflow-tenant.
+global:
+  tenant: tenant-a

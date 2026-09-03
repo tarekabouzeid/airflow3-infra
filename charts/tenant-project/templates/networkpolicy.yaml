@@ -1,0 +1,50 @@
+{{- if eq .Values.scope "namespace" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.tenant }}-default-deny
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.networkPolicy.allowSameNamespace }}
+    - from:
+        - podSelector: {}
+    {{- end }}
+  egress:
+    {{- if .Values.networkPolicy.allowSameNamespace }}
+    - to:
+        - podSelector: {}
+    {{- end }}
+    {{- if .Values.networkPolicy.allowDNSEgress }}
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- if .Values.networkPolicy.allowKubeAPIEgress }}
+    # Airflow's KubernetesExecutor and KubernetesPodOperator both talk to the k8s API
+    # (in-cluster and remote); allow all-ports HTTPS egress rather than pin the API server IP,
+    # since that IP is not guaranteed stable across cluster recreation.
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    {{- end }}
+    {{- range .Values.networkPolicy.extraEgressNamespaceSelectors }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .matchLabels | nindent 14 }}
+    {{- end }}
+{{- end }}

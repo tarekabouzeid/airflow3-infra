@@ -1,0 +1,16 @@
+# tenant-a's LOCAL workload namespace: same cluster as its Airflow instance. The in-cluster
+# Airflow ServiceAccount reaches it via a plain cross-namespace RoleBinding (no remote kubeconfig
+# needed), which is why localAirflowServiceAccount* is set here.
+tenant: tenant-a
+tenantRepoURL: https://github.com/tarekabouzeid/airflow3-infra-tenant-a
+tenantRepoBranch: main
+cluster:
+  name: af-work-a
+  server: https://af-work-a-control-plane:6443
+  vaultAuthMountPath: kubernetes-work-a
+vault:
+  mountPoint: tenant-a
+  esoRole: tenant-a-eso
+isLocal: true
+localAirflowServiceAccountNamespace: tenant-a-airflow
+localAirflowServiceAccountName: tenant-a-airflow

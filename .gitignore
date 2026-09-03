@@ -1,0 +1,7 @@
+.local/
+*.tmp
+.DS_Store
+.env
+*.retry
+charts/*/charts/*.tgz
+charts/*/Chart.lock

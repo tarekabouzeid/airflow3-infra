@@ -1,0 +1,124 @@
+name: argocd-upgrade
+
+# Rehearses this repo's actual Argo CD upgrade path on a real cluster: v2.14.x -> v3.0.x (crossing
+# the documented breaking-change boundary: fine-grained RBAC no longer applies to sub-resources,
+# logs RBAC enforced by default) -> latest 3.x. Argo CD upgrades itself the same way it would in
+# the real local lab (see docs/runbook-argocd-upgrade.md): its own Application's chart
+# targetRevision is bumped and it resyncs - here via a direct patch (standing in for "commit to
+# git"), since this workflow's job is to prove the upgrade mechanics work, not to modify the repo.
+#
+# A red run here means: do not bump ARGOCD_CHART_VERSION_* in versions.env until this is fixed.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "30 4 * * *"
+
+jobs:
+  upgrade-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+
+      - name: load pinned versions
+        run: |
+          source versions.env
+          {
+            echo "ARGOCD_CHART_REPO=${ARGOCD_CHART_REPO}"
+            echo "ARGOCD_CHART_VERSION_START=${ARGOCD_CHART_VERSION_START}"
+            echo "ARGOCD_CHART_VERSION_STEP2=${ARGOCD_CHART_VERSION_STEP2}"
+            echo "VAULT_CHART_REPO=${VAULT_CHART_REPO}"
+            echo "KIND_NODE_IMAGE=${KIND_NODE_IMAGE}"
+          } >> "$GITHUB_ENV"
+
+      - name: create cluster
+        run: |
+          cat > /tmp/ci-cluster.yaml <<YAML
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: ci
+          nodes:
+            - role: control-plane
+              image: ${KIND_NODE_IMAGE}
+          YAML
+          kind create cluster --config /tmp/ci-cluster.yaml
+
+      - name: add chart repos
+        run: |
+          helm repo add argo "${ARGOCD_CHART_REPO}"
+          helm repo add hashicorp "${VAULT_CHART_REPO}"
+          helm repo update
+          echo "ARGOCD_CHART_VERSION_LATEST=$(helm search repo argo/argo-cd --versions -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0][\"version\"])')" >> "$GITHUB_ENV"
+
+      - name: install Argo CD (start version)
+        run: |
+          helm upgrade --install argocd argo/argo-cd --version "${ARGOCD_CHART_VERSION_START}" \
+            -n argocd --create-namespace -f bootstrap/argocd-values.yaml --wait --timeout 10m
+
+      - name: bring up self-management + vault (the two things we check survive every hop)
+        run: |
+          kubectl apply -f platform/bootstrap/app-argocd-self.yaml
+          kubectl apply -f platform/bootstrap/vault-af-mgmt.yaml
+
+      - name: wait_healthy helper
+        run: |
+          cat > /tmp/wait_healthy.sh <<'BASH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          app=$1
+          for i in $(seq 1 60); do
+            sync=$(kubectl -n argocd get application "$app" -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
+            health=$(kubectl -n argocd get application "$app" -o jsonpath='{.status.health.status}' 2>/dev/null || true)
+            echo "  [$i] $app: sync=$sync health=$health"
+            [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ] && exit 0
+            sleep 10
+          done
+          echo "::error::$app never reached Synced+Healthy"
+          kubectl -n argocd get application "$app" -o yaml
+          exit 1
+          BASH
+          chmod +x /tmp/wait_healthy.sh
+
+      - name: wait for initial Synced+Healthy (argocd, vault)
+        run: |
+          /tmp/wait_healthy.sh argocd
+          /tmp/wait_healthy.sh vault
+
+      - name: upgrade hop 1 -> v2.14 chart line -> v3.0 chart line
+        run: |
+          kubectl -n argocd patch application argocd --type=json \
+            -p="[{\"op\":\"replace\",\"path\":\"/spec/sources/0/targetRevision\",\"value\":\"${ARGOCD_CHART_VERSION_STEP2}\"}]"
+          sleep 15   # the app-controller restarts mid-upgrade; a brief Progressing/Unknown blip here is expected
+          /tmp/wait_healthy.sh argocd
+          /tmp/wait_healthy.sh vault
+          echo "argocd-server image after hop 1:"
+          kubectl -n argocd get deployment argocd-server -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+
+      - name: upgrade hop 2 -> v3.0 chart line -> latest 3.x
+        run: |
+          kubectl -n argocd patch application argocd --type=json \
+            -p="[{\"op\":\"replace\",\"path\":\"/spec/sources/0/targetRevision\",\"value\":\"${ARGOCD_CHART_VERSION_LATEST}\"}]"
+          sleep 15
+          /tmp/wait_healthy.sh argocd
+          /tmp/wait_healthy.sh vault
+          echo "argocd-server image after hop 2 (latest, ${ARGOCD_CHART_VERSION_LATEST}):"
+          kubectl -n argocd get deployment argocd-server -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+
+      - name: dump diagnostics
+        if: always()
+        run: |
+          mkdir -p /tmp/diag
+          kubectl -n argocd get applications -o yaml > /tmp/diag/applications.yaml || true
+          kubectl -n argocd get pods -o wide > /tmp/diag/pods.txt || true
+      - name: upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: argocd-upgrade-diagnostics
+          path: /tmp/diag

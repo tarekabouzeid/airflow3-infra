@@ -1,0 +1,34 @@
+{{- if eq .Values.scope "project" }}
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .Values.tenant }}
+  namespace: {{ .Values.argocdNamespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: "Tenant project for {{ .Values.tenant }} - restricts sources, destinations and cluster-scoped resources"
+  sourceRepos:
+    - {{ .Values.platformRepoURL | quote }}
+    - {{ .Values.tenantRepoURL | quote }}
+  destinations:
+    {{- range .Values.destinations }}
+    - server: {{ .server | quote }}
+      namespace: {{ .namespace | quote }}
+    {{- end }}
+  # Tenants get no cluster-scoped resources at all: no CRDs, no ClusterRoles, nothing.
+  clusterResourceWhitelist: []
+  namespaceResourceBlacklist:
+    {{- toYaml .Values.namespaceResourceBlacklist | nindent 4 }}
+  orphanedResources:
+    warn: true
+  roles:
+    - name: readonly
+      description: "Read-only access to {{ .Values.tenant }}'s own applications"
+      policies:
+        - p, proj:{{ .Values.tenant }}:readonly, applications, get, {{ .Values.tenant }}/*, allow
+      groups:
+        - {{ .Values.tenant }}-readonly
+{{- end }}

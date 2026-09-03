@@ -1,0 +1,76 @@
+name: render-diff
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  render-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: azure/setup-helm@v4
+      - name: add chart repos
+        run: |
+          source versions.env
+          helm repo add apache-airflow "${AIRFLOW_CHART_REPO}"
+          helm repo update
+
+      - name: render HEAD
+        run: |
+          mkdir -p /tmp/render-head
+          helm template p1 charts/tenant-project -f tests/fixtures/tenant-a-project.yaml > /tmp/render-head/project.yaml
+          helm template p2 charts/tenant-project -f tests/fixtures/tenant-a-workloads-ns.yaml > /tmp/render-head/workloads-ns.yaml
+          helm dependency build charts/airflow-tenant
+          helm template p3 charts/airflow-tenant -f tests/fixtures/tenant-a-airflow.yaml > /tmp/render-head/airflow.yaml
+
+      - name: checkout base
+        run: |
+          git fetch origin "${{ github.event.pull_request.base.ref }}"
+          git worktree add /tmp/base "origin/${{ github.event.pull_request.base.ref }}"
+
+      - name: render BASE
+        run: |
+          mkdir -p /tmp/render-base
+          cd /tmp/base
+          helm repo add apache-airflow https://airflow.apache.org 2>/dev/null || true
+          helm repo update
+          helm template p1 charts/tenant-project -f tests/fixtures/tenant-a-project.yaml > /tmp/render-base/project.yaml 2>/dev/null || echo "(chart did not exist on base)" > /tmp/render-base/project.yaml
+          helm template p2 charts/tenant-project -f tests/fixtures/tenant-a-workloads-ns.yaml > /tmp/render-base/workloads-ns.yaml 2>/dev/null || echo "(chart did not exist on base)" > /tmp/render-base/workloads-ns.yaml
+          helm dependency build charts/airflow-tenant 2>/dev/null || true
+          helm template p3 charts/airflow-tenant -f tests/fixtures/tenant-a-airflow.yaml > /tmp/render-base/airflow.yaml 2>/dev/null || echo "(chart did not exist on base)" > /tmp/render-base/airflow.yaml
+
+      - name: diff
+        id: diff
+        run: |
+          set +e
+          diff -u /tmp/render-base/project.yaml /tmp/render-head/project.yaml > /tmp/diff.txt
+          diff -u /tmp/render-base/workloads-ns.yaml /tmp/render-head/workloads-ns.yaml >> /tmp/diff.txt
+          diff -u /tmp/render-base/airflow.yaml /tmp/render-head/airflow.yaml >> /tmp/diff.txt
+          set -e
+          {
+            echo 'diff<<EOF_DIFF'
+            if [ -s /tmp/diff.txt ]; then head -c 60000 /tmp/diff.txt; else echo "(no rendered-manifest changes)"; fi
+            echo 'EOF_DIFF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = "### Rendered manifest diff (base -> head)\n\n```diff\n" + `${{ steps.diff.outputs.diff }}`.slice(0, 60000) + "\n```";
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const marker = "### Rendered manifest diff";
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }

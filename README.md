@@ -25,13 +25,20 @@ Kubernetes, managed by a central Argo CD**, running entirely on local KIND clust
 
 ## Status
 
-Design complete, implementation not started.
+Implemented. Built and validated without local Docker/Kubernetes access - GitHub Actions
+(`.github/workflows/e2e-kind.yaml`) is the primary correctness check: it stands up a real Argo
+CD, real Vault, real External Secrets Operator, real Spark Operator, and a real Airflow
+deployment on a kind cluster, and runs both integration DAGs to completion. See
+[`docs/architecture.md`](docs/architecture.md) for the as-built design and every place it
+deviates from the original plan, and [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
+for the original approved design.
 
-**Start here: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** — the full architecture,
-the Argo CD strategy and the rationale behind it, the repository layout, and a phased build order
-where every phase has an explicit verification gate.
+**To run the full 3-cluster lab locally:** [`docs/runbook-bootstrap.md`](docs/runbook-bootstrap.md).
+**To rehearse an Argo CD upgrade:** [`docs/runbook-argocd-upgrade.md`](docs/runbook-argocd-upgrade.md).
+**To onboard a new tenant:** [`docs/runbook-tenant-onboarding.md`](docs/runbook-tenant-onboarding.md).
+**Something not working:** [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
-> **Note for whoever implements this:** read "Rule 0" at the top of the plan first. Every version
-> number in the plan is a researched starting point, not a verified fact — the planning session ran
-> without network access to the Helm registries. Verify each one against the upstream registry and
-> official docs before pinning it.
+> Every version pinned in `versions.env` was resolved from documentation research in an
+> environment without Helm-registry access. CI's `verify-versions` job (`lint.yaml`) checks every
+> one against the real registries on every push - treat a failure there as the version needing an
+> update, not a flaky check.

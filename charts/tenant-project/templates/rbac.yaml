@@ -1,0 +1,67 @@
+{{- if and (eq .Values.scope "namespace") .Values.isWorkloadNamespace }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.workloadRunnerServiceAccount }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.tenant }}-workload-runner
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["sparkapplications", "sparkapplications/status", "scheduledsparkapplications"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.tenant }}-workload-runner-self
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.workloadRunnerServiceAccount }}
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Values.tenant }}-workload-runner
+  apiGroup: rbac.authorization.k8s.io
+{{- if and .Values.localAirflowServiceAccountNamespace .Values.localAirflowServiceAccountName }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.tenant }}-workload-runner-local-airflow
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.localAirflowServiceAccountName }}
+    namespace: {{ .Values.localAirflowServiceAccountNamespace }}
+roleRef:
+  kind: Role
+  name: {{ .Values.tenant }}-workload-runner
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

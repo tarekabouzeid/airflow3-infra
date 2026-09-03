@@ -1,0 +1,138 @@
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main, "claude/**"]
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y shellcheck
+          shellcheck scripts/lib/*.sh scripts/*.sh
+
+  yamllint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install yamllint
+      - run: yamllint -c .yamllint.yaml .
+
+  verify-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install helm
+        uses: azure/setup-helm@v4
+      - name: resolve every pinned chart version against the real registries
+        run: |
+          set -euo pipefail
+          source versions.env
+          helm repo add argo "${ARGOCD_CHART_REPO}"
+          helm repo add apache-airflow "${AIRFLOW_CHART_REPO}"
+          helm repo add external-secrets "${ESO_CHART_REPO}"
+          helm repo add hashicorp "${VAULT_CHART_REPO}"
+          helm repo add spark-operator "${SPARK_OPERATOR_CHART_REPO}"
+          helm repo update
+
+          check() {
+            local repo_chart=$1 version=$2
+            echo "checking ${repo_chart} @ ${version}"
+            helm search repo "${repo_chart}" --versions -o json \
+              | python3 -c "import json,sys; vs={e['version'] for e in json.load(sys.stdin)}; sys.exit(0 if '${version}' in vs else 1)" \
+              || { echo "::error::${repo_chart} version ${version} does not exist in the chart repo"; exit 1; }
+          }
+
+          check "argo/argo-cd" "${ARGOCD_CHART_VERSION_START}"
+          check "argo/argo-cd" "${ARGOCD_CHART_VERSION_STEP2}"
+          check "apache-airflow/airflow" "${AIRFLOW_CHART_VERSION}"
+
+          echo "Latest available versions (informational - not enforced):"
+          helm search repo argo/argo-cd --versions | head -5
+          helm search repo external-secrets/external-secrets --versions | head -3
+          helm search repo hashicorp/vault --versions | head -3
+          helm search repo spark-operator/spark-operator --versions | head -3
+
+  helm-lint-and-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install helm
+        uses: azure/setup-helm@v4
+      - name: install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: add chart repos
+        run: |
+          source versions.env
+          helm repo add apache-airflow "${AIRFLOW_CHART_REPO}"
+          helm repo update
+
+      - name: helm lint - tenant-project
+        run: helm lint charts/tenant-project
+      - name: helm lint - postgres-lite
+        run: helm lint charts/postgres-lite
+      - name: helm dependency build - airflow-tenant
+        run: helm dependency build charts/airflow-tenant
+      - name: helm lint - airflow-tenant
+        run: helm lint charts/airflow-tenant --set image.tag=3.1.7-hashicorp-1
+
+      - name: render tenant-project (scope=project)
+        run: helm template tenant-a-project charts/tenant-project -f tests/fixtures/tenant-a-project.yaml > /tmp/render-project.yaml
+      - name: render tenant-project (scope=namespace, airflow)
+        run: helm template tenant-a-airflow-ns charts/tenant-project -f tests/fixtures/tenant-a-airflow-ns.yaml > /tmp/render-airflow-ns.yaml
+      - name: render tenant-project (scope=namespace, workloads)
+        run: helm template tenant-a-workloads-ns charts/tenant-project -f tests/fixtures/tenant-a-workloads-ns.yaml > /tmp/render-workloads-ns.yaml
+      - name: render postgres-lite
+        run: helm template postgres charts/postgres-lite -f tests/fixtures/postgres-lite.yaml > /tmp/render-postgres.yaml
+      - name: render airflow-tenant
+        run: helm template tenant-a-airflow charts/airflow-tenant -f tests/fixtures/tenant-a-airflow.yaml > /tmp/render-airflow.yaml
+
+      - name: kubeconform - platform-owned CRs (no CRD schemas needed)
+        run: kubeconform -strict -summary -ignore-missing-schemas /tmp/render-project.yaml /tmp/render-airflow-ns.yaml /tmp/render-workloads-ns.yaml /tmp/render-postgres.yaml
+
+      - name: kubeconform - airflow-tenant (core k8s + CRD catalog for external-secrets)
+        run: |
+          kubeconform -strict -summary \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -ignore-missing-schemas \
+            /tmp/render-airflow.yaml
+
+      - name: assert platform-controlled ServiceAccount actually lands on every Airflow pod spec
+        run: |
+          set -euo pipefail
+          for component in scheduler dag-processor triggerer; do
+            echo "checking serviceAccountName on component: ${component}"
+            python3 - "$component" <<'PYEOF'
+import sys, yaml
+component = sys.argv[1]
+docs = list(yaml.safe_load_all(open("/tmp/render-airflow.yaml")))
+found = False
+for d in docs:
+    if not d:
+        continue
+    labels = (d.get("spec", {}) or {}).get("template", {}).get("metadata", {}).get("labels", {}) or {}
+    if labels.get("component") == component:
+        found = True
+        sa = d["spec"]["template"]["spec"].get("serviceAccountName")
+        assert sa == "tenant-a-airflow", f"{component} pod spec has serviceAccountName={sa!r}, expected 'tenant-a-airflow' - the airflow-tenant chart's serviceAccount override key may be wrong, see charts/airflow-tenant/values.yaml"
+if not found:
+    print(f"::warning::no rendered pod template found with component={component} - verify the chart's label convention")
+PYEOF
+          done
+
+      - name: upload rendered manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-manifests
+          path: /tmp/render-*.yaml

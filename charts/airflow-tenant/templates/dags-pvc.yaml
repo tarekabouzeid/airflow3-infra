@@ -1,0 +1,16 @@
+# Owned by this chart (not the airflow subchart) so the dag-loader hook Job and every Airflow
+# component reference the exact same claim, and so it survives independently of the airflow
+# subchart's own resource lifecycle.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.tenant }}-dags
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "airflow-tenant.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: {{ .Values.dags.storageClassName }}
+  resources:
+    requests:
+      storage: {{ .Values.dags.pvcSize }}

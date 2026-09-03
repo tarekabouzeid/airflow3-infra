@@ -1,0 +1,109 @@
+# One multi-source Application per tenant: the tenant's Airflow 3 deployment on its home cluster.
+# Combines 3 sources, applied together as one Argo CD Application:
+#   1. charts/tenant-project (scope=namespace) - Namespace + Quota + LimitRange + NetworkPolicy
+#      for "<tenant>-airflow", so the namespace guardrails and the workload they protect are one
+#      sync unit.
+#   2. charts/airflow-tenant - the platform-owned Airflow deployment shape. Inline values here
+#      carry the platform-controlled wiring (Vault mount, ServiceAccount, DAG source repo) and
+#      take precedence over anything the tenant sets for the SAME keys.
+#   3. The tenant's own repo (ref: values only) - contributes deploy/airflow/values.yaml, which
+#      may override image tag / resources / replica counts, but not the wiring above.
+# Generator: one entry per platform/tenants/<tenant>/tenant.yaml file.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenant-airflow
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/tarekabouzeid/airflow3-infra
+        revision: main
+        files:
+          - path: "platform/tenants/*/tenant.yaml"
+  template:
+    metadata:
+      name: "{{.tenant}}-airflow"
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        platform.tenant: "{{.tenant}}"
+      annotations:
+        argocd.argoproj.io/sync-wave: "2"
+    spec:
+      project: "{{.tenant}}"
+      sources:
+        - repoURL: https://github.com/tarekabouzeid/airflow3-infra
+          targetRevision: main
+          path: charts/tenant-project
+          helm:
+            values: |
+              scope: namespace
+              tenant: {{.tenant}}
+              namespace: {{.tenant}}-airflow
+              isWorkloadNamespace: false
+        - repoURL: https://github.com/tarekabouzeid/airflow3-infra
+          targetRevision: main
+          path: charts/airflow-tenant
+          helm:
+            valueFiles:
+              - $values/deploy/airflow/values.yaml
+            values: |
+              tenant: {{.tenant}}
+              clusterName: {{.homeCluster.name}}
+              global:
+                tenant: {{.tenant}}
+              vault:
+                address: http://af-mgmt-control-plane:8200
+                mountPoint: {{.vault.mountPoint}}
+                authMountPath: {{.homeCluster.vaultAuthMountPath}}
+                airflowRole: {{.vault.airflowRole}}
+                esoRole: {{.vault.esoRole}}
+              tenantRepo:
+                url: {{.tenantRepoURL}}
+                branch: {{.tenantRepoBranch}}
+                dagsPath: dags
+              serviceAccountName: {{.tenant}}-airflow
+              airflow:
+                data:
+                  metadataSecretName: {{.tenant}}-airflow-metadata-conn
+                serviceAccount:
+                  create: false
+                  name: {{.tenant}}-airflow
+                dags:
+                  persistence:
+                    enabled: true
+                    existingClaim: {{.tenant}}-dags
+                    accessMode: ReadWriteOnce
+                env:
+                  - name: AIRFLOW__SECRETS__BACKEND
+                    value: "airflow.providers.hashicorp.secrets.vault.VaultBackend"
+                  - name: AIRFLOW__SECRETS__BACKEND_KWARGS
+                    value: >-
+                      {"connections_path":"connections","variables_path":"variables","config_path":null,
+                      "mount_point":"{{.vault.mountPoint}}","auth_type":"kubernetes",
+                      "kubernetes_role":"{{.vault.airflowRole}}",
+                      "kubernetes_mount_point":"{{.homeCluster.vaultAuthMountPath}}",
+                      "url":"http://af-mgmt-control-plane:8200"}
+        - repoURL: "{{.tenantRepoURL}}"
+          targetRevision: "{{.tenantRepoBranch}}"
+          ref: values
+      destination:
+        server: "{{.homeCluster.server}}"
+        namespace: "{{.tenant}}-airflow"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+          - ApplyOutOfSyncOnly=true
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 15s
+            factor: 2
+            maxDuration: 5m

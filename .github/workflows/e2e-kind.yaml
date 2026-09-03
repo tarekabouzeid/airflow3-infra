@@ -1,0 +1,347 @@
+name: e2e-kind
+
+# Primary correctness test for this repo: there is no local Docker/Kubernetes access in the
+# development environment this repo was built in, so this workflow - not a human running `make
+# bootstrap` - is what actually proves the platform's charts and scripts work against a real
+# cluster, real Argo CD, real Vault, real External Secrets Operator, and a real Spark job.
+#
+# Scope, deliberately: ONE kind cluster, not three. A full 3-cluster + remote-execution rehearsal
+# needs resources and cross-cluster Docker networking a shared GitHub-hosted runner cannot give
+# it reliably - that is exercised locally instead (see docs/runbook-bootstrap.md). Here, "remote"
+# execution is simulated by pointing the "k8s_remote" Airflow connection back at the SAME cluster
+# via an explicit kubeconfig (not the in-cluster identity) - which still proves the
+# KubernetesPodOperator/SparkKubernetesOperator "external connection" code path for real.
+#
+# Also deliberately: the tenant layer (charts/tenant-project, charts/airflow-tenant) is applied
+# directly with `helm template | kubectl apply`, not wrapped in Argo CD Applications/
+# ApplicationSets, to avoid needing a real tenant git repo + GitHub token inside CI. The
+# ApplicationSet templating itself is checked statically by lint.yaml/policy.yaml; Argo CD's own
+# self-management and its management of Vault ARE exercised for real, below.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 4 * * *"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+      - name: install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: load pinned versions
+        run: |
+          source versions.env
+          {
+            echo "ARGOCD_CHART_VERSION_START=${ARGOCD_CHART_VERSION_START}"
+            echo "ARGOCD_CHART_REPO=${ARGOCD_CHART_REPO}"
+            echo "AIRFLOW_CHART_REPO=${AIRFLOW_CHART_REPO}"
+            echo "ESO_CHART_REPO=${ESO_CHART_REPO}"
+            echo "VAULT_CHART_REPO=${VAULT_CHART_REPO}"
+            echo "SPARK_OPERATOR_CHART_REPO=${SPARK_OPERATOR_CHART_REPO}"
+            echo "KIND_NODE_IMAGE=${KIND_NODE_IMAGE}"
+          } >> "$GITHUB_ENV"
+
+      - name: create kind cluster
+        run: |
+          sed "s#\${KIND_NODE_IMAGE}#${KIND_NODE_IMAGE}#" kind/af-mgmt.yaml > /tmp/ci-cluster.yaml || true
+          cat > /tmp/ci-cluster.yaml <<YAML
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: ci
+          nodes:
+            - role: control-plane
+              image: ${KIND_NODE_IMAGE}
+          YAML
+          kind create cluster --config /tmp/ci-cluster.yaml
+          kubectl cluster-info
+
+      - name: build and load the airflow-tenant image
+        run: |
+          docker build -t airflow-tenant:ci-1 --build-arg AIRFLOW_VERSION=3.1.7 images/airflow
+          kind load docker-image airflow-tenant:ci-1 --name ci
+
+      - name: add chart repos
+        run: |
+          helm repo add argo "${ARGOCD_CHART_REPO}"
+          helm repo add apache-airflow "${AIRFLOW_CHART_REPO}"
+          helm repo add external-secrets "${ESO_CHART_REPO}"
+          helm repo add hashicorp "${VAULT_CHART_REPO}"
+          helm repo add spark-operator "${SPARK_OPERATOR_CHART_REPO}"
+          helm repo update
+
+      - name: install Argo CD (pinned start-of-upgrade-path version)
+        run: |
+          helm upgrade --install argocd argo/argo-cd \
+            --version "${ARGOCD_CHART_VERSION_START}" \
+            -n argocd --create-namespace \
+            -f bootstrap/argocd-values.yaml \
+            --wait --timeout 10m
+
+      - name: Argo CD manages itself + deploys Vault
+        run: |
+          kubectl apply -f platform/bootstrap/app-argocd-self.yaml
+          kubectl apply -f platform/bootstrap/vault-af-mgmt.yaml
+          echo "waiting for the 'vault' Application to become Synced+Healthy..."
+          for i in $(seq 1 60); do
+            sync=$(kubectl -n argocd get application vault -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
+            health=$(kubectl -n argocd get application vault -o jsonpath='{.status.health.status}' 2>/dev/null || true)
+            echo "  [$i] sync=$sync health=$health"
+            [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ] && break
+            sleep 10
+          done
+          [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ] || { kubectl -n argocd get application vault -o yaml; exit 1; }
+
+      - name: install External Secrets Operator + Spark Operator (plain helm, in-cluster)
+        run: |
+          helm upgrade --install external-secrets external-secrets/external-secrets \
+            -n external-secrets --create-namespace --set installCRDs=true --wait --timeout 5m
+          helm upgrade --install spark-operator spark-operator/spark-operator \
+            -n spark-operator --create-namespace \
+            --set spark.jobNamespaces[0]=tenant-ci-workloads --wait --timeout 5m
+
+      - name: vault init + unseal
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do kubectl -n vault get pod vault-0 >/dev/null 2>&1 && break; sleep 5; done
+          kubectl -n vault wait --for=condition=Ready pod/vault-0 --timeout=120s || true
+          init_json=$(kubectl -n vault exec -i vault-0 -- vault operator init -key-shares=1 -key-threshold=1 -format=json)
+          echo "$init_json" > /tmp/vault-keys.json
+          ROOT_TOKEN=$(jq -r '.root_token' /tmp/vault-keys.json)
+          KEY=$(jq -r '.unseal_keys_b64[0]' /tmp/vault-keys.json)
+          kubectl -n vault exec -i vault-0 -- vault operator unseal "$KEY"
+          echo "ROOT_TOKEN=${ROOT_TOKEN}" >> "$GITHUB_ENV"
+
+      - name: configure vault (kubernetes auth, KV mount, policies, roles, seed secrets)
+        run: |
+          set -euo pipefail
+          vexec() { kubectl -n vault exec -i vault-0 -- env VAULT_TOKEN="${ROOT_TOKEN}" "$@"; }
+
+          vexec vault secrets enable -path=tenant-ci -version=2 kv
+
+          kubectl -n kube-system apply -f - <<'YAML'
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: vault-token-reviewer
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: vault-token-reviewer-auth-delegator
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: system:auth-delegator
+          subjects:
+            - kind: ServiceAccount
+              name: vault-token-reviewer
+              namespace: kube-system
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: vault-token-reviewer-token
+            annotations:
+              kubernetes.io/service-account.name: vault-token-reviewer
+          type: kubernetes.io/service-account-token
+          YAML
+
+          JWT=""
+          for i in $(seq 1 30); do
+            JWT=$(kubectl -n kube-system get secret vault-token-reviewer-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)
+            [ -n "$JWT" ] && break
+            sleep 2
+          done
+          [ -n "$JWT" ]
+
+          CA=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d)
+
+          vexec vault auth enable -path=kubernetes-ci kubernetes
+          vexec vault write auth/kubernetes-ci/config \
+            kubernetes_host="https://kubernetes.default.svc" \
+            kubernetes_ca_cert="${CA}" \
+            token_reviewer_jwt="${JWT}"
+
+          vexec vault policy write tenant-ci-airflow - <<'HCL'
+          path "tenant-ci/data/connections/*" { capabilities = ["read", "list"] }
+          path "tenant-ci/data/variables/*"   { capabilities = ["read", "list"] }
+          HCL
+          vexec vault policy write tenant-ci-eso - <<'HCL'
+          path "tenant-ci/data/db"               { capabilities = ["read"] }
+          path "tenant-ci/data/workload-secrets" { capabilities = ["read"] }
+          HCL
+
+          vexec vault write auth/kubernetes-ci/role/tenant-ci-airflow \
+            bound_service_account_names=tenant-ci-airflow \
+            bound_service_account_namespaces=tenant-ci-airflow \
+            policies=tenant-ci-airflow ttl=1h
+          vexec vault write auth/kubernetes-ci/role/tenant-ci-eso \
+            bound_service_account_names=tenant-ci-airflow,tenant-ci-workload-runner \
+            bound_service_account_namespaces=tenant-ci-airflow,tenant-ci-workloads \
+            policies=tenant-ci-eso ttl=1h
+
+          vexec vault kv put tenant-ci/db user=tenant_ci password="$(openssl rand -hex 16)" dbname=tenant_ci
+          vexec vault kv put tenant-ci/workload-secrets greeting="hello from Vault via ESO, tenant-ci"
+          vexec vault kv put tenant-ci/variables/hello value="hello from Vault, tenant-ci"
+
+      - name: apply tenant-project (namespace guardrails: airflow + workloads)
+        run: |
+          helm template p1 charts/tenant-project -f ci/values-project-ci.yaml | kubectl apply --server-side -f -
+          helm template p2 charts/tenant-project -f ci/values-workloads-ci.yaml | kubectl apply --server-side -f -
+
+      - name: wire the "remote" (same-cluster) k8s_remote connection
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do kubectl -n tenant-ci-workloads get sa tenant-ci-workload-runner >/dev/null 2>&1 && break; sleep 3; done
+          kubectl -n tenant-ci-workloads apply -f - <<'YAML'
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: tenant-ci-workload-runner-token
+            annotations:
+              kubernetes.io/service-account.name: tenant-ci-workload-runner
+          type: kubernetes.io/service-account-token
+          YAML
+          TOKEN=""
+          for i in $(seq 1 30); do
+            TOKEN=$(kubectl -n tenant-ci-workloads get secret tenant-ci-workload-runner-token -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)
+            [ -n "$TOKEN" ] && break
+            sleep 2
+          done
+          [ -n "$TOKEN" ]
+          CA=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+          KUBECONFIG_YAML=$(cat <<YAML
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - name: ci
+              cluster: {server: "https://kubernetes.default.svc", certificate-authority-data: "${CA}"}
+          contexts:
+            - name: ci
+              context: {cluster: ci, namespace: tenant-ci-workloads, user: tenant-ci-workload-runner}
+          current-context: ci
+          users:
+            - name: tenant-ci-workload-runner
+              user: {token: "${TOKEN}"}
+          YAML
+          )
+          EXTRA=$(jq -n --arg kc "$KUBECONFIG_YAML" '{kube_config: $kc, in_cluster: false}')
+          kubectl -n vault exec -i vault-0 -- env VAULT_TOKEN="${ROOT_TOKEN}" \
+            vault kv put tenant-ci/connections/k8s_remote conn_type=kubernetes extra="${EXTRA}"
+
+      - name: workload-secrets SecretStore + ExternalSecret (CI fixture, stands in for a tenant's deploy/workloads chart)
+        run: |
+          kubectl -n tenant-ci-workloads apply -f - <<YAML
+          apiVersion: external-secrets.io/v1
+          kind: SecretStore
+          metadata:
+            name: tenant-ci-vault
+          spec:
+            provider:
+              vault:
+                server: http://vault.vault.svc:8200
+                path: tenant-ci
+                version: v2
+                auth:
+                  kubernetes:
+                    mountPath: kubernetes-ci
+                    role: tenant-ci-eso
+                    serviceAccountRef:
+                      name: tenant-ci-workload-runner
+          ---
+          apiVersion: external-secrets.io/v1
+          kind: ExternalSecret
+          metadata:
+            name: tenant-ci-workload-secrets
+          spec:
+            refreshInterval: 1h
+            secretStoreRef: {name: tenant-ci-vault, kind: SecretStore}
+            target: {name: tenant-ci-workload-secrets, creationPolicy: Owner}
+            data:
+              - secretKey: greeting
+                remoteRef: {key: workload-secrets, property: greeting}
+          YAML
+
+      - name: deploy tenant-ci Airflow
+        run: |
+          helm dependency build charts/airflow-tenant
+          helm template tenant-ci-airflow charts/airflow-tenant -f ci/values-airflow-ci.yaml \
+            | kubectl apply --server-side -f -
+
+      - name: wait for postgres + ExternalSecrets + Airflow components
+        run: |
+          set -euo pipefail
+          kubectl -n tenant-ci-airflow rollout status statefulset/tenant-ci-airflow-postgres --timeout=180s
+          for i in $(seq 1 60); do
+            ok=$(kubectl -n tenant-ci-airflow get externalsecret tenant-ci-airflow-metadata-conn -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+            [ "$ok" = "True" ] && break
+            sleep 5
+          done
+          [ "$ok" = "True" ] || { kubectl -n tenant-ci-airflow get externalsecret -o yaml; exit 1; }
+          kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-scheduler --timeout=300s
+          kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-dag-processor --timeout=300s
+          kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-triggerer --timeout=300s || true
+
+      - name: seed the DAGs PVC directly (no tenant repo to clone from in CI)
+        run: |
+          set -euo pipefail
+          POD=$(kubectl -n tenant-ci-airflow get pods -l component=scheduler -o jsonpath='{.items[0].metadata.name}')
+          kubectl -n tenant-ci-airflow cp ci/dags "${POD}:/opt/airflow/dags" -c scheduler
+          sleep 20
+          echo "checking for DAG import errors..."
+          kubectl -n tenant-ci-airflow exec "${POD}" -c scheduler -- airflow dags list-import-errors
+
+      - name: run the integration DAGs
+        run: |
+          set -euo pipefail
+          NS=tenant-ci-airflow
+          POD=$(kubectl -n "$NS" get pods -l component=scheduler -o jsonpath='{.items[0].metadata.name}')
+          for dag in it_kubernetes_pod_operator it_spark; do
+            RUN_ID="ci-$(date +%s)"
+            echo "triggering $dag ($RUN_ID)..."
+            kubectl -n "$NS" exec "$POD" -c scheduler -- airflow dags trigger "$dag" --run-id "$RUN_ID"
+            STATE="running"
+            for i in $(seq 1 60); do
+              STATE=$(kubectl -n "$NS" exec "$POD" -c scheduler -- airflow dags state "$dag" "$RUN_ID" 2>/dev/null | tail -n1 | tr -d '\r')
+              echo "  [$i] $dag -> $STATE"
+              [ "$STATE" = "success" ] && break
+              [ "$STATE" = "failed" ] && break
+              sleep 10
+            done
+            if [ "$STATE" != "success" ]; then
+              echo "::error::$dag did not succeed (state=$STATE)"
+              kubectl -n "$NS" exec "$POD" -c scheduler -- airflow tasks states-for-dag-run "$dag" "$RUN_ID" || true
+              exit 1
+            fi
+          done
+
+      - name: dump cluster state
+        if: always()
+        run: |
+          mkdir -p /tmp/diag
+          kubectl get applications -n argocd -o wide > /tmp/diag/applications.txt || true
+          kubectl get pods -A -o wide > /tmp/diag/pods.txt || true
+          kubectl get externalsecrets -A -o wide > /tmp/diag/externalsecrets.txt || true
+          kubectl get sparkapplications -A -o wide > /tmp/diag/sparkapplications.txt || true
+          for ns in tenant-ci-airflow tenant-ci-workloads vault; do
+            kubectl -n "$ns" get events --sort-by=.lastTimestamp > "/tmp/diag/events-${ns}.txt" || true
+          done
+
+      - name: upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostics
+          path: /tmp/diag

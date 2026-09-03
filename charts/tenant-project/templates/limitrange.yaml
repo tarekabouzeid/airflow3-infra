@@ -1,0 +1,18 @@
+{{- if eq .Values.scope "namespace" }}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ .Values.tenant }}-limits
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-project.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: {{ .Values.limitRange.defaultRequestCPU }}
+        memory: {{ .Values.limitRange.defaultRequestMemory }}
+      default:
+        cpu: {{ .Values.limitRange.defaultLimitCPU }}
+        memory: {{ .Values.limitRange.defaultLimitMemory }}
+{{- end }}

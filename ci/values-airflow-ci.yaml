@@ -1,0 +1,48 @@
+# Values for the e2e-kind.yaml smoke test: a single "tenant-ci" tenant on ONE kind cluster (no
+# remote cluster exists in CI - "k8s_remote" is wired to point back at the same cluster via an
+# explicit kubeconfig connection instead of the in-cluster identity, which still exercises the
+# real KubernetesPodOperator/SparkKubernetesOperator "external connection" code path).
+# dagLoader is disabled here: e2e-kind.yaml seeds the DAGs PVC directly with `kubectl cp` instead
+# of cloning a tenant git repo (there is no tenant-ci repo - this fixture lives in this platform
+# repo instead, see ci/dags/).
+tenant: tenant-ci
+clusterName: ci
+global:
+  tenant: tenant-ci
+vault:
+  address: http://vault.vault.svc:8200
+  mountPoint: tenant-ci
+  authMountPath: kubernetes-ci
+  airflowRole: tenant-ci-airflow
+  esoRole: tenant-ci-eso
+serviceAccountName: tenant-ci-airflow
+dagLoader:
+  enabled: false
+image:
+  repository: airflow-tenant
+  tag: ci-1
+  pullPolicy: IfNotPresent
+airflow:
+  images:
+    airflow:
+      repository: airflow-tenant
+      tag: ci-1
+      pullPolicy: IfNotPresent
+  data:
+    metadataSecretName: tenant-ci-airflow-metadata-conn
+  serviceAccount:
+    create: false
+    name: tenant-ci-airflow
+  dags:
+    persistence:
+      enabled: true
+      existingClaim: tenant-ci-dags
+      accessMode: ReadWriteOnce
+  env:
+    - name: AIRFLOW__SECRETS__BACKEND
+      value: "airflow.providers.hashicorp.secrets.vault.VaultBackend"
+    - name: AIRFLOW__SECRETS__BACKEND_KWARGS
+      value: >-
+        {"connections_path":"connections","variables_path":"variables","config_path":null,
+        "mount_point":"tenant-ci","auth_type":"kubernetes","kubernetes_role":"tenant-ci-airflow",
+        "kubernetes_mount_point":"kubernetes-ci","url":"http://vault.vault.svc:8200"}

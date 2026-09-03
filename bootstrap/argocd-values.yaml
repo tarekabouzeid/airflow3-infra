@@ -1,0 +1,43 @@
+# Values for the argo/argo-cd chart. Used identically by:
+#   1. The one-time imperative bootstrap install (scripts/30-install-argocd.sh)
+#   2. platform/bootstrap/app-argocd-self.yaml, which has Argo CD manage itself from here on
+# Upgrading Argo CD = bump platform/bootstrap/app-argocd-self.yaml's targetRevision, commit, sync.
+# This file does not change across that upgrade unless a new version needs a new value.
+
+global:
+  domain: argocd.local
+
+configs:
+  cm:
+    application.instanceLabelKey: argocd.argoproj.io/instance
+  params:
+    server.insecure: "true"   # local lab only: TLS terminates at kubectl port-forward, not at argocd-server
+
+server:
+  service:
+    type: ClusterIP
+  extraArgs:
+    - --insecure
+
+controller:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+repoServer:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+applicationSet:
+  enabled: true
+
+redis:
+  enabled: true
+
+dex:
+  enabled: false   # no SSO for a local lab; CLI/UI auth is via the built-in admin secret

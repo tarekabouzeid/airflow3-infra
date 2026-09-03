@@ -1,0 +1,25 @@
+# SparkApplication template rendered by SparkKubernetesOperator (Jinja-templated via
+# {{ params.* }} / {{ ds_nodash }}). Deliberately tiny: 1 driver + 1 executor, 512Mi each.
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: it-spark-pi-{{ params.suffix }}
+  namespace: {{ params.namespace }}
+spec:
+  type: Scala
+  mode: cluster
+  image: apache/spark:3.5.3
+  imagePullPolicy: IfNotPresent
+  mainClass: org.apache.spark.examples.SparkPi
+  mainApplicationFile: local:///opt/spark/examples/jars/spark-examples_2.12-3.5.3.jar
+  sparkVersion: "3.5.3"
+  restartPolicy:
+    type: Never
+  driver:
+    serviceAccount: {{ params.service_account }}
+    cores: 1
+    memory: 512m
+  executor:
+    instances: 1
+    cores: 1
+    memory: 512m

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: postgres-lite
+description: >
+  Minimal single-instance Postgres for a tenant's Airflow metadata DB. Deliberately not the
+  Airflow chart's bundled Bitnami subchart: this is ~2 templates on the plain official
+  postgres image, easier to reason about for a rebuild-from-scratch lab. Not for production use
+  (no replication, no backups) - see docs/architecture.md for the rationale.
+type: application
+version: 0.1.0
+appVersion: "16"

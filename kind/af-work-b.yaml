@@ -1,0 +1,17 @@
+# af-work-b - single-node KIND cluster. Single-node is a HARD requirement, not a convenience: the
+# local-path storage class is ReadWriteOnce, and the Airflow DAGs PVC is mounted by every
+# component (scheduler, dag-processor, api-server, triggerer, and every KubernetesExecutor worker
+# pod) - RWO only works across pods scheduled on the same node. See docs/architecture.md.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: af-work-b
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.32.8@sha256:abd489f042d2b644e2d033f5c2d900bc707798d075e8186cb65e3f1367a9d5a1
+# Registers this node's containerd to treat localhost:5001 as a mirror for the shared local
+# registry container (scripts/20-local-registry.sh). Exact pattern from kind's own docs:
+# https://kind.sigs.k8s.io/docs/user/local-registry/
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:5001"]
+      endpoint = ["http://kind-registry:5000"]

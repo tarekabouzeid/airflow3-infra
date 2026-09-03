@@ -1,0 +1,4 @@
+scope: namespace
+tenant: tenant-a
+namespace: tenant-a-airflow
+isWorkloadNamespace: false

@@ -1,0 +1,77 @@
+# One multi-source Application per (tenant, workload cluster) pair - where a tenant's Spark /
+# KubernetesPodOperator tasks actually land, on the tenant's home cluster AND on any remote
+# cluster it targets. Combines:
+#   1. charts/tenant-project (scope=namespace, isWorkloadNamespace=true) - Namespace + Quota +
+#      LimitRange + NetworkPolicy + the workload-runner ServiceAccount/Role/RoleBinding.
+#   2. The tenant's own deploy/workloads chart (SecretStore + ExternalSecret pulling this
+#      tenant's workload secrets out of Vault). Tenants own this chart directly - it only ever
+#      touches their own namespace, which the AppProject already restricts them to.
+# Generator: one entry per platform/tenants/<tenant>/workloads-<cluster>.yaml file. Adding a
+# remote cluster for a tenant = adding one such file.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenant-workloads
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/tarekabouzeid/airflow3-infra
+        revision: main
+        files:
+          - path: "platform/tenants/*/workloads-*.yaml"
+  template:
+    metadata:
+      name: "{{.tenant}}-workloads-{{.cluster.name}}"
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        platform.tenant: "{{.tenant}}"
+      annotations:
+        argocd.argoproj.io/sync-wave: "2"
+    spec:
+      project: "{{.tenant}}"
+      sources:
+        - repoURL: https://github.com/tarekabouzeid/airflow3-infra
+          targetRevision: main
+          path: charts/tenant-project
+          helm:
+            values: |
+              scope: namespace
+              tenant: {{.tenant}}
+              namespace: {{.tenant}}-workloads
+              isWorkloadNamespace: true
+              workloadRunnerServiceAccount: {{.tenant}}-workload-runner
+              localAirflowServiceAccountNamespace: "{{.localAirflowServiceAccountNamespace}}"
+              localAirflowServiceAccountName: "{{.localAirflowServiceAccountName}}"
+        - repoURL: "{{.tenantRepoURL}}"
+          targetRevision: "{{.tenantRepoBranch}}"
+          path: deploy/workloads
+          helm:
+            values: |
+              tenant: {{.tenant}}
+              vault:
+                address: http://af-mgmt-control-plane:8200
+                mountPoint: {{.vault.mountPoint}}
+                authMountPath: {{.cluster.vaultAuthMountPath}}
+                esoRole: {{.vault.esoRole}}
+              serviceAccountName: {{.tenant}}-workload-runner
+      destination:
+        server: "{{.cluster.server}}"
+        namespace: "{{.tenant}}-workloads"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+          - ApplyOutOfSyncOnly=true
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 15s
+            factor: 2
+            maxDuration: 5m

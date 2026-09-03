@@ -1,0 +1,56 @@
+# HashiCorp Vault (OSS), standalone with file storage - not dev mode, so init/unseal is a real
+# exercise (see scripts/50-vault-init.sh). Runs only on af-mgmt; every workload cluster reaches it
+# over the shared kind Docker network.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://helm.releases.hashicorp.com
+    chart: vault
+    targetRevision: "0.30.0"   # verified by CI against the real chart index; see versions.env
+    helm:
+      valueFiles: []
+      values: |
+        server:
+          dev:
+            enabled: false
+          dataStorage:
+            enabled: true
+            size: 1Gi
+          standalone:
+            enabled: true
+          service:
+            type: NodePort
+            nodePort: 30820
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+        injector:
+          enabled: false   # ESO handles workload secrets; no Vault Agent Injector in this lab
+        ui:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

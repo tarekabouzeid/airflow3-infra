@@ -1,0 +1,58 @@
+# One Application per tenant, rendering charts/tenant-project (scope=project) - i.e. the AppProject
+# that actually enforces the tenant's trust boundary. Generator: one entry per
+# platform/tenants/<tenant>/tenant.yaml file. Onboarding a tenant = adding that file; tenants never
+# touch this ApplicationSet or anything under platform/.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenant-projects
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/tarekabouzeid/airflow3-infra
+        revision: main
+        files:
+          - path: "platform/tenants/*/tenant.yaml"
+  template:
+    metadata:
+      name: "{{.tenant}}-project"
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        platform.tenant: "{{.tenant}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/tarekabouzeid/airflow3-infra
+        targetRevision: main
+        path: charts/tenant-project
+        helm:
+          values: |
+            scope: project
+            tenant: {{.tenant}}
+            argocdNamespace: argocd
+            platformRepoURL: {{.platformRepoURL}}
+            tenantRepoURL: {{.tenantRepoURL}}
+            # Wildcard destination: this tenant may sync into any namespace named "<tenant>-*" on
+            # ANY registered cluster. Adding a new remote cluster for this tenant later needs no
+            # change here - only a new platform/tenants/{{.tenant}}/workloads-<cluster>.yaml file.
+            destinations:
+              - server: "*"
+                namespace: "{{.tenant}}-*"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: argocd
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m

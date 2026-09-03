@@ -1,0 +1,22 @@
+apiVersion: v2
+name: airflow-tenant
+description: >
+  Platform-owned umbrella chart deploying one tenant's Airflow 3 instance. Wraps the official
+  apache-airflow/airflow chart and the local postgres-lite chart, and adds the platform's glue:
+  a pinned ServiceAccount for Vault Kubernetes auth, a namespaced SecretStore + ExternalSecret
+  for the metadata-DB credential, a PVC for DAGs, and a PostSync hook Job that loads DAGs from
+  the tenant's git repo onto that PVC.
+  Deployed via an Argo CD multi-source Application: this chart (source repo) + the tenant's own
+  repo (ref: values) supplying deploy/airflow/values.yaml.
+type: application
+version: 0.1.0
+appVersion: "3.1.7"
+dependencies:
+  - name: airflow
+    version: "1.22.0"        # keep in sync with versions.env AIRFLOW_CHART_VERSION - verified by CI
+    repository: "https://airflow.apache.org"
+    alias: airflow
+  - name: postgres-lite
+    version: "0.1.0"
+    repository: "file://../postgres-lite"
+    alias: postgres-lite

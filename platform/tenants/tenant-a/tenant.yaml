@@ -1,0 +1,15 @@
+# Tenant registry entry - this file, plus the workloads-<cluster>.yaml files beside it, IS the
+# multi-tenancy trust boundary. Platform-owned; tenants never edit anything under platform/.
+# Consumed by: appset-tenant-projects.yaml (AppProject) and appset-tenant-airflow.yaml (Airflow app).
+tenant: tenant-a
+platformRepoURL: https://github.com/tarekabouzeid/airflow3-infra
+tenantRepoURL: https://github.com/tarekabouzeid/airflow3-infra-tenant-a
+tenantRepoBranch: main
+homeCluster:
+  name: af-work-a
+  server: https://af-work-a-control-plane:6443
+  vaultAuthMountPath: kubernetes-work-a
+vault:
+  mountPoint: tenant-a
+  airflowRole: tenant-a-airflow
+  esoRole: tenant-a-eso

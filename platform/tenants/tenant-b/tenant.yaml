@@ -1,0 +1,14 @@
+# tenant-b's home cluster is deliberately the OTHER cluster from tenant-a (af-work-b), so the two
+# tenants together exercise both clusters as "home" and as "remote".
+tenant: tenant-b
+platformRepoURL: https://github.com/tarekabouzeid/airflow3-infra
+tenantRepoURL: https://github.com/tarekabouzeid/airflow3-infra-tenant-b
+tenantRepoBranch: main
+homeCluster:
+  name: af-work-b
+  server: https://af-work-b-control-plane:6443
+  vaultAuthMountPath: kubernetes-work-b
+vault:
+  mountPoint: tenant-b
+  airflowRole: tenant-b-airflow
+  esoRole: tenant-b-eso

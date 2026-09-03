@@ -1,0 +1,3 @@
+# Deliberately empty - charts/airflow-tenant/values.yaml already models tenant-a as its own
+# illustrative default. This fixture exists so CI has a named, obvious place to add overrides
+# later without touching the chart's real defaults.
