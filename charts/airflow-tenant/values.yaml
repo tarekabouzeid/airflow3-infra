@@ -94,9 +94,9 @@ airflow:
     enabled: true
 
   # Airflow 3's UI + REST API server (replaces the Airflow 2 "webserver" component name).
-  apiServer:
-    defaultUser:
-      enabled: false
+  # No apiServer.defaultUser key in this chart's schema (verified by CI) - a default admin user,
+  # if the chart creates one at all for this executor, is not disabled here.
+  apiServer: {}
 
   triggerer:
     enabled: true
@@ -112,5 +112,3 @@ airflow:
         {"connections_path":"connections","variables_path":"variables","config_path":null,
         "mount_point":"tenant-a","auth_type":"kubernetes","kubernetes_role":"tenant-a-airflow",
         "kubernetes_mount_point":"kubernetes-work-a","url":"http://af-mgmt-control-plane:8200"}
-
-  extraEnv: []

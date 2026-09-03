@@ -1,6 +1,7 @@
 extends: default
 ignore: |
   charts/*/charts/
+  charts/*/templates/
   .local/
 rules:
   line-length:

@@ -19,9 +19,12 @@ vexec() { kubectl --context "${mgmt_ctx}" -n vault exec -i vault-0 -- env VAULT_
 
 ensure_kv_mount() {
   local mount=$1
-  vexec vault secrets list -format=json | jq -e --arg m "${mount}/" 'has($m)' >/dev/null 2>&1 \
-    && log "KV mount ${mount} already exists" \
-    || { log "enabling KV-v2 mount ${mount}"; vexec vault secrets enable -path="${mount}" -version=2 kv; }
+  if vexec vault secrets list -format=json | jq -e --arg m "${mount}/" 'has($m)' >/dev/null 2>&1; then
+    log "KV mount ${mount} already exists"
+  else
+    log "enabling KV-v2 mount ${mount}"
+    vexec vault secrets enable -path="${mount}" -version=2 kv
+  fi
 }
 
 # Sets up the Kubernetes auth mount for one cluster: creates a dedicated token-reviewer
@@ -101,6 +104,7 @@ ensure_policy() {
 configure_tenant() {
   local tenant=$1 home=$2 home_mount=$3 remote=$4 remote_mount=$5
 
+  log "configuring tenant ${tenant}: home=${home} (${home_mount}), remote=${remote} (${remote_mount})"
   ensure_kv_mount "${tenant}"
 
   ensure_policy "${tenant}-airflow" "

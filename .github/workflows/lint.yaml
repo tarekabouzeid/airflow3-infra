@@ -45,9 +45,13 @@ jobs:
           check() {
             local repo_chart=$1 version=$2
             echo "checking ${repo_chart} @ ${version}"
-            helm search repo "${repo_chart}" --versions -o json \
-              | python3 -c "import json,sys; vs={e['version'] for e in json.load(sys.stdin)}; sys.exit(0 if '${version}' in vs else 1)" \
-              || { echo "::error::${repo_chart} version ${version} does not exist in the chart repo"; exit 1; }
+            local versions_json
+            versions_json=$(helm search repo "${repo_chart}" --versions -o json)
+            if ! echo "${versions_json}" | jq -e --arg v "${version}" 'any(.[]; .version == $v)' >/dev/null; then
+              echo "::error::${repo_chart} version ${version} does not exist in the chart repo. Available (newest 10):"
+              echo "${versions_json}" | jq -r '.[].version' | head -10
+              exit 1
+            fi
           }
 
           check "argo/argo-cd" "${ARGOCD_CHART_VERSION_START}"
