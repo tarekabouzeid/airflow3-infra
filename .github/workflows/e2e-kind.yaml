@@ -196,7 +196,7 @@ jobs:
           vexec vault kv put tenant-ci/workload-secrets greeting="hello from Vault via ESO, tenant-ci"
           vexec vault kv put tenant-ci/variables/hello value="hello from Vault, tenant-ci"
 
-      - name: apply tenant-project (namespace guardrails: airflow + workloads)
+      - name: "apply tenant-project (namespace guardrails: airflow + workloads)"
         run: |
           helm template p1 charts/tenant-project -f ci/values-project-ci.yaml | kubectl apply --server-side -f -
           helm template p2 charts/tenant-project -f ci/values-workloads-ci.yaml | kubectl apply --server-side -f -

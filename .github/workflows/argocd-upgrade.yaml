@@ -54,7 +54,7 @@ jobs:
           helm repo add argo "${ARGOCD_CHART_REPO}"
           helm repo add hashicorp "${VAULT_CHART_REPO}"
           helm repo update
-          echo "ARGOCD_CHART_VERSION_LATEST=$(helm search repo argo/argo-cd --versions -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0][\"version\"])')" >> "$GITHUB_ENV"
+          echo "ARGOCD_CHART_VERSION_LATEST=$(helm search repo argo/argo-cd --versions -o json | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["version"])')" >> "$GITHUB_ENV"
 
       - name: install Argo CD (start version)
         run: |

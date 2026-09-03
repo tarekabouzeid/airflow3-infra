@@ -110,24 +110,10 @@ jobs:
       - name: assert platform-controlled ServiceAccount actually lands on every Airflow pod spec
         run: |
           set -euo pipefail
+          pip install --quiet pyyaml
           for component in scheduler dag-processor triggerer; do
             echo "checking serviceAccountName on component: ${component}"
-            python3 - "$component" <<'PYEOF'
-import sys, yaml
-component = sys.argv[1]
-docs = list(yaml.safe_load_all(open("/tmp/render-airflow.yaml")))
-found = False
-for d in docs:
-    if not d:
-        continue
-    labels = (d.get("spec", {}) or {}).get("template", {}).get("metadata", {}).get("labels", {}) or {}
-    if labels.get("component") == component:
-        found = True
-        sa = d["spec"]["template"]["spec"].get("serviceAccountName")
-        assert sa == "tenant-a-airflow", f"{component} pod spec has serviceAccountName={sa!r}, expected 'tenant-a-airflow' - the airflow-tenant chart's serviceAccount override key may be wrong, see charts/airflow-tenant/values.yaml"
-if not found:
-    print(f"::warning::no rendered pod template found with component={component} - verify the chart's label convention")
-PYEOF
+            python3 tests/assert_service_account.py "${component}"
           done
 
       - name: upload rendered manifests

@@ -13,7 +13,12 @@ jobs:
       - uses: azure/setup-helm@v4
       - name: install conftest
         run: |
-          curl -sSL https://github.com/open-policy-agent/conftest/releases/latest/download/conftest_Linux_x86_64.tar.gz | tar xz
+          set -euo pipefail
+          # conftest's release asset filename embeds the version (conftest_<ver>_Linux_x86_64.tar.gz),
+          # so the "latest/download/<literal-name>" shortcut that works for some tools (e.g.
+          # kubeconform) does not work here - resolve the version first.
+          VERSION=$(curl -sSL https://api.github.com/repos/open-policy-agent/conftest/releases/latest | jq -r '.tag_name | ltrimstr("v")')
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/conftest_${VERSION}_Linux_x86_64.tar.gz" | tar xz
           sudo mv conftest /usr/local/bin/
       - name: add chart repos
         run: |
