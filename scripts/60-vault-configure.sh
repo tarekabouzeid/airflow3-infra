@@ -117,13 +117,20 @@ path \"${tenant}/data/git\"              { capabilities = [\"read\"] }
 path \"${tenant}/data/workload-secrets\" { capabilities = [\"read\"] }
 "
 
-  # Airflow's own VaultBackend identity - home cluster only.
-  ensure_tenant_role "${home_mount}" "${tenant}-airflow" "${tenant}-airflow" "${tenant}-airflow" "${tenant}-airflow"
+  # Airflow's own VaultBackend identity - home cluster only. bound_service_account_names="*"
+  # (any SA name) rather than an exact name: the official chart suffixes serviceAccount.name per
+  # component (e.g. "tenant-a-airflow-scheduler", "...-worker" for KubernetesExecutor pods)
+  # instead of using it literally - confirmed by CI. The namespace binding below is what actually
+  # provides the tenant boundary, same as the "*" pattern Vault's own Kubernetes auth docs
+  # describe for exactly this case.
+  ensure_tenant_role "${home_mount}" "${tenant}-airflow" "*" "${tenant}-airflow" "${tenant}-airflow"
 
-  # ESO identity - bound for BOTH ServiceAccounts that exist on the home cluster (the Airflow SA,
-  # for the postgres/git ExternalSecrets in the airflow namespace, and the workload-runner SA, for
-  # the local workloads namespace), and for just the workload-runner SA on the remote cluster.
-  ensure_tenant_role "${home_mount}" "${tenant}-eso" "${tenant}-airflow,${tenant}-workload-runner" "${tenant}-airflow,${tenant}-workloads" "${tenant}-eso"
+  # ESO identity - "*" here for the same reason (must admit the chart-derived scheduler SA name
+  # for the postgres/git ExternalSecrets in the airflow namespace), scoped to this tenant's own
+  # airflow + local-workloads namespaces. The remote-cluster role only ever needs to admit the
+  # workload-runner SA (a name this repo controls directly, no chart involved), so it stays an
+  # exact match there.
+  ensure_tenant_role "${home_mount}" "${tenant}-eso" "*" "${tenant}-airflow,${tenant}-workloads" "${tenant}-eso"
   ensure_tenant_role "${remote_mount}" "${tenant}-eso" "${tenant}-workload-runner" "${tenant}-workloads" "${tenant}-eso"
 
   # Internal DB credential - generated once, never in git. Re-running this script does not

@@ -44,7 +44,6 @@ spec:
               isWorkloadNamespace: true
               workloadRunnerServiceAccount: {{.tenant}}-workload-runner
               localAirflowServiceAccountNamespace: "{{.localAirflowServiceAccountNamespace}}"
-              localAirflowServiceAccountName: "{{.localAirflowServiceAccountName}}"
         - repoURL: "{{.tenantRepoURL}}"
           targetRevision: "{{.tenantRepoBranch}}"
           path: deploy/workloads

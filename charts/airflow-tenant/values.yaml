@@ -47,6 +47,13 @@ dagLoader:
   hookDeletePolicy: BeforeHookCreation
 
 serviceAccountName: tenant-a-airflow
+# The chart does NOT use serviceAccount.name verbatim - it suffixes it per component
+# (confirmed by CI: "tenant-a-airflow" + serviceAccount.create=true produced
+# "tenant-a-airflow-scheduler" on the scheduler pod, not "tenant-a-airflow"). Vault auth is
+# bound by namespace + a wildcard SA name (see scripts/60-vault-configure.sh) specifically to
+# avoid needing to enumerate every per-component suffix, but templates/secretstore.yaml still
+# needs ONE concrete, always-present SA name to authenticate as - the scheduler's.
+vaultServiceAccountName: tenant-a-airflow-scheduler
 
 # --- passed straight through to the apache-airflow/airflow subchart (alias: airflow) ---
 # Keys verified against `helm show values apache-airflow/airflow --version <pinned>` in CI
@@ -83,11 +90,11 @@ airflow:
       size: 2Gi
       storageClassName: standard
 
-  # A single ServiceAccount name, pinned across every component, so one Vault Kubernetes-auth
-  # role can bind to it. `create: false` because templates/serviceaccount.yaml creates it once
-  # (Argo CD would otherwise fight over ownership between this subchart and a sibling app).
+  # `name` here is a PREFIX, not a literal name - the chart appends "-<component>" per
+  # component (e.g. "tenant-a-airflow-scheduler"). See vaultServiceAccountName above and
+  # scripts/60-vault-configure.sh for how Vault auth handles that.
   serviceAccount:
-    create: false
+    create: true
     name: tenant-a-airflow
 
   dagProcessor:

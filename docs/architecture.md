@@ -114,8 +114,14 @@ inline fields.
   `apache-airflow-providers-hashicorp` and `apache-airflow-providers-cncf-kubernetes`, installed
   against Airflow's own published constraints file for the exact Airflow + Python version, so
   provider versions are never hand-pinned out of sync with Airflow core.
-- One pinned ServiceAccount name across every component, so one Vault Kubernetes-auth role binds
-  cleanly to all of them.
+- `serviceAccount.name` is a **prefix**, not a literal name: the official chart suffixes it per
+  component (`tenant-a-airflow-scheduler`, `-worker` for KubernetesExecutor pods, etc. - confirmed
+  by CI, not assumed). Rather than track every derived name, Vault roles for this namespace bind
+  `bound_service_account_names="*"` and rely on `bound_service_account_namespaces` for the actual
+  tenant boundary (see `scripts/60-vault-configure.sh`); the one k8s-native RBAC RoleBinding that
+  needs a subject (letting the home cluster's Airflow identity reach its local workloads
+  namespace) binds to the `system:serviceaccounts:<namespace>` group instead of a named
+  ServiceAccount, for the same reason.
 
 ## Remote workload execution
 

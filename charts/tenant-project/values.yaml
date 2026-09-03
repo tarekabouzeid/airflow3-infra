@@ -63,4 +63,3 @@ workloadRunnerServiceAccount: tenant-a-workload-runner
 # Leave empty on remote clusters: there, scripts/70-remote-access.sh mints a token for
 # workloadRunnerServiceAccount and stores it (as a kubeconfig) in Vault instead.
 localAirflowServiceAccountNamespace: ""
-localAirflowServiceAccountName: ""

@@ -4,4 +4,3 @@ namespace: tenant-a-workloads
 isWorkloadNamespace: true
 workloadRunnerServiceAccount: tenant-a-workload-runner
 localAirflowServiceAccountNamespace: tenant-a-airflow
-localAirflowServiceAccountName: tenant-a-airflow

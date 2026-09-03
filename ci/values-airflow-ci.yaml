@@ -16,6 +16,7 @@ vault:
   airflowRole: tenant-ci-airflow
   esoRole: tenant-ci-eso
 serviceAccountName: tenant-ci-airflow
+vaultServiceAccountName: tenant-ci-airflow-scheduler
 dagLoader:
   enabled: false
 image:
@@ -31,7 +32,7 @@ airflow:
   data:
     metadataSecretName: tenant-ci-airflow-metadata-conn
   serviceAccount:
-    create: false
+    create: true
     name: tenant-ci-airflow
   dags:
     persistence:

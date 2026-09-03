@@ -20,7 +20,9 @@ spec:
         {{- include "airflow-tenant.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
-      serviceAccountName: {{ .Values.serviceAccountName }}
+      # No Vault/k8s-API access needed here (git clone + a Secret already mounted via env, plain
+      # PVC write) - runs as the namespace's default ServiceAccount rather than needing one of
+      # its own.
       containers:
         - name: dag-loader
           image: {{ .Values.dagLoader.image }}

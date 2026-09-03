@@ -184,11 +184,11 @@ jobs:
           HCL
 
           vexec vault write auth/kubernetes-ci/role/tenant-ci-airflow \
-            bound_service_account_names=tenant-ci-airflow \
+            bound_service_account_names="*" \
             bound_service_account_namespaces=tenant-ci-airflow \
             policies=tenant-ci-airflow ttl=1h
           vexec vault write auth/kubernetes-ci/role/tenant-ci-eso \
-            bound_service_account_names=tenant-ci-airflow,tenant-ci-workload-runner \
+            bound_service_account_names="*" \
             bound_service_account_namespaces=tenant-ci-airflow,tenant-ci-workloads \
             policies=tenant-ci-eso ttl=1h
 

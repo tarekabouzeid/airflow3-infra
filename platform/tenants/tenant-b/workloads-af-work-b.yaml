@@ -10,4 +10,3 @@ vault:
   esoRole: tenant-b-eso
 isLocal: true
 localAirflowServiceAccountNamespace: tenant-b-airflow
-localAirflowServiceAccountName: tenant-b-airflow
