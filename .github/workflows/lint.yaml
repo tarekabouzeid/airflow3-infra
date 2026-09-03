@@ -49,7 +49,7 @@ jobs:
             versions_json=$(helm search repo "${repo_chart}" --versions -o json)
             if ! echo "${versions_json}" | jq -e --arg v "${version}" 'any(.[]; .version == $v)' >/dev/null; then
               echo "::error::${repo_chart} version ${version} does not exist in the chart repo. Available (newest 10):"
-              echo "${versions_json}" | jq -r '.[].version' | head -10
+              echo "${versions_json}" | jq -r '.[].version' | head -10 || true
               exit 1
             fi
           }
@@ -59,10 +59,10 @@ jobs:
           check "apache-airflow/airflow" "${AIRFLOW_CHART_VERSION}"
 
           echo "Latest available versions (informational - not enforced):"
-          helm search repo argo/argo-cd --versions | head -5
-          helm search repo external-secrets/external-secrets --versions | head -3
-          helm search repo hashicorp/vault --versions | head -3
-          helm search repo spark-operator/spark-operator --versions | head -3
+          helm search repo argo/argo-cd --versions | head -5 || true
+          helm search repo external-secrets/external-secrets --versions | head -3 || true
+          helm search repo hashicorp/vault --versions | head -3 || true
+          helm search repo spark-operator/spark-operator --versions | head -3 || true
 
   helm-lint-and-render:
     runs-on: ubuntu-latest

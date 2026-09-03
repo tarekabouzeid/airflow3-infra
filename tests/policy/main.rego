@@ -32,9 +32,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-	some kind
-	kind == {"Deployment", "StatefulSet", "Job"}[_]
-	input.kind == kind
+	input.kind in {"Deployment", "StatefulSet", "Job"}
 	container := input.spec.template.spec.containers[_]
 	endswith(container.image, ":latest")
 	msg := sprintf("%s %q container %q uses a ':latest' image tag: %v", [input.kind, input.metadata.name, container.name, container.image])
