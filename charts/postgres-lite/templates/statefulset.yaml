@@ -32,29 +32,26 @@ spec:
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
-            # Kubernetes only expands $(VAR) references (used below in the probes) for names
-            # declared in this container's own env[] list - never for envFrom-imported ones, even
-            # though they're the same variable at runtime. Without this, pg_isready received the
-            # literal, unexpanded string "$(POSTGRES_USER)" as its -U argument and the postgres
-            # pod never became ready (confirmed: 'FATAL: role "$(POSTGRES_USER)" does not exist'
-            # repeating in its logs). Re-declaring it here (same secret key) makes it expandable
-            # without duplicating the value anywhere.
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.existingSecret | default (printf "%s-postgres-credentials" .Values.global.tenant) }}
-                  key: POSTGRES_USER
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+          # Kubernetes' $(VAR) expansion in exec probe commands only ever substitutes names
+          # declared in this container's own env[] list, never envFrom-imported ones - re-declaring
+          # POSTGRES_USER as an explicit env entry (tried first) still didn't fix it: pg_isready
+          # then reported 'FATAL: role "root" does not exist', i.e. -U resolved to nothing and
+          # pg_isready fell back to the exec'd process's OS user (root, since a fresh `exec` into
+          # this image starts as root regardless of which user the foreground postgres process
+          # dropped to). Running the probe through a real shell instead sidesteps k8s's expansion
+          # entirely and reads the container's actual process environment (correctly populated
+          # either way), which is the standard workaround for this well-known limitation.
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
             initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\""]
             initialDelaySeconds: 15
             periodSeconds: 10
           resources:
