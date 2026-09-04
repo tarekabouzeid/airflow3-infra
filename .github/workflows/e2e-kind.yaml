@@ -140,6 +140,17 @@ jobs:
             exit 1
           fi
 
+      - name: "apply tenant-project (namespace guardrails: airflow + workloads)"
+        run: |
+          # Must run BEFORE installing Spark Operator: its jobNamespaces setting below creates
+          # RBAC resources inside tenant-ci-workloads, which only exists once this step's
+          # Namespace manifest is applied. (Confirmed failure mode: "namespaces
+          # \"tenant-ci-workloads\" not found" from the spark-operator helm install when this was
+          # ordered after it.) Plain kubectl apply, not an Argo CD Application - no dependency on
+          # Vault/ESO/Spark Operator, just core Namespace/Quota/LimitRange/NetworkPolicy/RBAC.
+          helm template p1 charts/tenant-project -f ci/values-project-ci.yaml | kubectl apply --server-side -f -
+          helm template p2 charts/tenant-project -f ci/values-workloads-ci.yaml | kubectl apply --server-side -f -
+
       - name: install External Secrets Operator + Spark Operator (plain helm, in-cluster)
         run: |
           helm upgrade --install external-secrets external-secrets/external-secrets \
@@ -243,11 +254,6 @@ jobs:
           vexec vault kv put tenant-ci/db user=tenant_ci password="$(openssl rand -hex 16)" dbname=tenant_ci
           vexec vault kv put tenant-ci/workload-secrets greeting="hello from Vault via ESO, tenant-ci"
           vexec vault kv put tenant-ci/variables/hello value="hello from Vault, tenant-ci"
-
-      - name: "apply tenant-project (namespace guardrails: airflow + workloads)"
-        run: |
-          helm template p1 charts/tenant-project -f ci/values-project-ci.yaml | kubectl apply --server-side -f -
-          helm template p2 charts/tenant-project -f ci/values-workloads-ci.yaml | kubectl apply --server-side -f -
 
       - name: wire the "remote" (same-cluster) k8s_remote connection
         run: |
