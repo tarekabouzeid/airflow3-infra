@@ -363,6 +363,12 @@ jobs:
             # wait-for-airflow-migrations init container just polls for this job's success), so
             # dump its actual logs directly instead of guessing why `airflow db migrate` fails.
             kubectl -n tenant-ci-airflow describe job tenant-ci-airflow-run-airflow-migrations || true
+            # --previous matters here: by the time this dump runs, the job has usually just
+            # restarted (BackOff cycle), so the plain (non---previous) logs call below only shows
+            # the brand-new attempt's first few seconds - confirmed empty in run #21 despite the
+            # container clearly crashing repeatedly. --previous gets the terminated instance that
+            # actually crashed and printed the real error.
+            kubectl -n tenant-ci-airflow logs job/tenant-ci-airflow-run-airflow-migrations --all-containers --tail=200 --previous || true
             kubectl -n tenant-ci-airflow logs job/tenant-ci-airflow-run-airflow-migrations --all-containers --tail=200 || true
             kubectl -n tenant-ci-airflow get events --sort-by=.lastTimestamp | tail -n 40 || true
             echo "::endgroup::"
