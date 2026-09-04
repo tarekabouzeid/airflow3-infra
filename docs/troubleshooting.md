@@ -42,6 +42,18 @@ not eternal, and re-running is idempotent (it overwrites the Vault connection wi
 token). If the workload-runner ServiceAccount itself is missing, its owning Application
 (`<tenant>-workloads-<cluster>`) hasn't synced yet on that cluster.
 
+**The `vault` Application's StatefulSet stays permanently `OutOfSync`, even though Vault is
+clearly up and every other resource in the Application shows `Synced`.**
+Observed on the pinned start-of-upgrade Argo CD version (chart 7.8.x): the API server
+auto-populates a StatefulSet default field this Argo CD version's diffing doesn't normalize away,
+so Argo CD sees a permanent cosmetic diff on that one resource. It does not mean Vault is broken -
+confirm directly with `kubectl -n vault get pod vault-0` and `vault status` via `kubectl exec`
+rather than trusting the Application's sync status for this specific resource. `e2e-kind.yaml`
+checks pod state directly for exactly this reason rather than waiting on Argo CD's sync status.
+If this bothers you enough to fix properly (rather than ignore), find the exact diffed field with
+`argocd app diff vault` and add it to `spec.ignoreDifferences` on the Application - do not guess
+the field name and add an `ignoreDifferences` entry speculatively; confirm it first.
+
 **Argo CD Application flips to `Unknown` health mid Argo-CD-upgrade.**
 Expected - see `docs/runbook-argocd-upgrade.md`. The application-controller restarts itself
 during its own upgrade. Give it a few minutes before treating it as a real failure.

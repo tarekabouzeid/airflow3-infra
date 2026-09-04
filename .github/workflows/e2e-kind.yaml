@@ -95,26 +95,19 @@ jobs:
         run: |
           kubectl apply -f platform/bootstrap/app-argocd-self.yaml
           kubectl apply -f platform/bootstrap/vault-af-mgmt.yaml
-          # Only wait for Synced here, deliberately NOT Healthy: a fresh, non-dev-mode Vault
-          # starts sealed and uninitialized by design, so its readiness probe (`vault status`,
-          # which the chart uses directly) - and therefore Argo CD's health check - cannot pass
-          # until AFTER the "vault init + unseal" step below runs. Gating on Healthy here would
-          # deadlock forever. Health is verified later, after Vault is actually unsealed.
-          echo "waiting for the 'vault' Application to become Synced..."
-          sync=""
-          for i in $(seq 1 60); do
-            sync=$(kubectl -n argocd get application vault -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
-            health=$(kubectl -n argocd get application vault -o jsonpath='{.status.health.status}' 2>/dev/null || true)
-            echo "  [$i] sync=$sync health=$health (health is informational only at this stage)"
-            [ "$sync" = "Synced" ] && break
-            sleep 5
-          done
-          if [ "$sync" != "Synced" ]; then
-            echo "::group::vault Application"
-            kubectl -n argocd get application vault -o yaml
-            echo "::endgroup::"
-            exit 1
-          fi
+          # Deliberately NOT gating on the Application's sync/health status here:
+          # - Health can't pass yet regardless: a fresh non-dev Vault starts sealed and
+          #   uninitialized, so its readiness probe (`vault status`) fails until the
+          #   "vault init + unseal" step below runs. Verified for real afterward instead.
+          # - Sync also isn't a reliable gate: on Argo CD 7.8.x (pinned start-of-upgrade
+          #   version), this chart's StatefulSet resource can sit permanently OutOfSync even
+          #   once fully applied, because the API server auto-populates a StatefulSet default
+          #   (persistentVolumeClaimRetentionPolicy) that this Argo CD version's diffing doesn't
+          #   normalize away - every other resource in the Application shows Synced, only this
+          #   one field-level cosmetic diff never resolves. A prior iteration of this workflow
+          #   waited on sync=Synced and timed out here despite Vault being fully up.
+          # What actually matters for the rest of this job is simpler and more direct: does the
+          # vault-0 pod exist and run. Check that instead of Argo CD's own bookkeeping.
           echo "waiting for the vault-0 pod to exist and reach Running phase (not necessarily Ready)..."
           for i in $(seq 1 60); do
             phase=$(kubectl -n vault get pod vault-0 -o jsonpath='{.status.phase}' 2>/dev/null || true)
