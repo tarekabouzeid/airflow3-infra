@@ -376,6 +376,13 @@ jobs:
               kubectl -n tenant-ci-airflow logs "$MIGRATIONS_POD" -c run-airflow-migrations --tail=200 --previous 2>&1 || true
               echo "--- current attempt ---"
               kubectl -n tenant-ci-airflow logs "$MIGRATIONS_POD" -c run-airflow-migrations --tail=200 2>&1 || true
+              # Both log calls above came back completely empty in runs #21-23 despite the
+              # container visibly crash-looping - a container dying with zero output (even with
+              # PYTHONUNBUFFERED=1) is the OOMKill signature. describe pod's "Last State" section
+              # gives the real exit reason/code (OOMKilled vs Error vs something else) directly
+              # from the kubelet, which log output alone can't when there's none to show.
+              echo "--- pod describe (see Last State reason/exit code) ---"
+              kubectl -n tenant-ci-airflow describe pod "$MIGRATIONS_POD" 2>&1 || true
             fi
             kubectl -n tenant-ci-airflow get events --sort-by=.lastTimestamp | tail -n 40 || true
             echo "::endgroup::"

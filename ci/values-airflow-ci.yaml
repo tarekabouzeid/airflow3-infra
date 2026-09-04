@@ -82,11 +82,20 @@ airflow:
   createUserJob:
     resources:
       requests: {cpu: 50m, memory: 128Mi}
-      limits: {cpu: 300m, memory: 256Mi}
+      limits: {cpu: 300m, memory: 512Mi}
+  # run-airflow-migrations crashes with zero stdout/stderr on every attempt (confirmed: both
+  # `kubectl logs --previous` and the current attempt come back completely empty despite the
+  # container visibly restarting) - a container dying with no output at all, even with
+  # PYTHONUNBUFFERED=1 set, is the signature of an OOMKill: the kernel SIGKILLs the process before
+  # anything can flush, bypassing process-level output buffering entirely. `airflow db migrate` on
+  # a brand-new schema, loading every installed provider (including this image's extra
+  # apache-airflow-providers-hashicorp), plausibly exceeds 256Mi. The node has ample memory
+  # headroom (~50% used per the node diagnostics; CPU, not memory, was the tight constraint
+  # earlier), so raising this substantially is safe.
   migrateDatabaseJob:
     resources:
-      requests: {cpu: 50m, memory: 128Mi}
-      limits: {cpu: 300m, memory: 256Mi}
+      requests: {cpu: 50m, memory: 256Mi}
+      limits: {cpu: 300m, memory: 1Gi}
   env:
     - name: AIRFLOW__SECRETS__BACKEND
       value: "airflow.providers.hashicorp.secrets.vault.VaultBackend"
