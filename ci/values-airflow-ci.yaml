@@ -48,38 +48,49 @@ airflow:
   # failure: "exceeded quota: tenant-ci-quota, requested: limits.cpu=2, used: limits.cpu=4,
   # limited: limits.cpu=4". Scaled down for this smoke test only - the quota mechanics themselves
   # (and the real per-tenant defaults in charts/tenant-project/values.yaml) are unchanged.
+  #
+  # requests.cpu specifically had to come down further still: the GitHub Actions runner's KIND
+  # node has only 2 CPU total (confirmed via `kubectl describe node`'s Capacity/Allocatable), and
+  # kube-system + Argo CD + Vault alone already request ~1.4 of those 2 CPUs before any tenant
+  # workload exists - leaving well under 1 CPU of real scheduling headroom for the whole
+  # tenant-ci-airflow stack. Scheduling admission is decided on requests, not limits, so limits
+  # can stay comfortable while requests stay minimal.
   scheduler:
     resources:
-      requests: {cpu: 100m, memory: 256Mi}
+      requests: {cpu: 50m, memory: 256Mi}
       limits: {cpu: 300m, memory: 512Mi}
   dagProcessor:
     resources:
-      requests: {cpu: 100m, memory: 256Mi}
+      requests: {cpu: 50m, memory: 256Mi}
       limits: {cpu: 300m, memory: 512Mi}
   apiServer:
     resources:
-      requests: {cpu: 100m, memory: 256Mi}
+      requests: {cpu: 50m, memory: 256Mi}
       limits: {cpu: 300m, memory: 512Mi}
   triggerer:
     resources:
-      requests: {cpu: 100m, memory: 256Mi}
+      requests: {cpu: 50m, memory: 256Mi}
       limits: {cpu: 300m, memory: 512Mi}
   workers:
     resources:
-      requests: {cpu: 100m, memory: 256Mi}
+      requests: {cpu: 50m, memory: 256Mi}
       limits: {cpu: 300m, memory: 512Mi}
   statsd:
     resources:
-      requests: {cpu: 50m, memory: 64Mi}
+      requests: {cpu: 20m, memory: 64Mi}
       limits: {cpu: 100m, memory: 128Mi}
   createUserJob:
     resources:
-      requests: {cpu: 100m, memory: 128Mi}
+      requests: {cpu: 50m, memory: 128Mi}
       limits: {cpu: 300m, memory: 256Mi}
   migrateDatabaseJob:
     resources:
-      requests: {cpu: 100m, memory: 128Mi}
+      requests: {cpu: 50m, memory: 128Mi}
       limits: {cpu: 300m, memory: 256Mi}
+postgres-lite:
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
   env:
     - name: AIRFLOW__SECRETS__BACKEND
       value: "airflow.providers.hashicorp.secrets.vault.VaultBackend"

@@ -12,7 +12,7 @@ isWorkloadNamespace: false
 # limits.cpu=1300m when every explicit override in ci/values-airflow-ci.yaml caps that
 # component's main container at 300m (300m + this LimitRange's old 1000m default = 1300m).
 limitRange:
-  defaultRequestCPU: 20m
+  defaultRequestCPU: 10m
   defaultRequestMemory: 32Mi
   defaultLimitCPU: 150m
   defaultLimitMemory: 128Mi
