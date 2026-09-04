@@ -363,13 +363,20 @@ jobs:
             # wait-for-airflow-migrations init container just polls for this job's success), so
             # dump its actual logs directly instead of guessing why `airflow db migrate` fails.
             kubectl -n tenant-ci-airflow describe job tenant-ci-airflow-run-airflow-migrations || true
-            # --previous matters here: by the time this dump runs, the job has usually just
-            # restarted (BackOff cycle), so the plain (non---previous) logs call below only shows
-            # the brand-new attempt's first few seconds - confirmed empty in run #21 despite the
-            # container clearly crashing repeatedly. --previous gets the terminated instance that
-            # actually crashed and printed the real error.
-            kubectl -n tenant-ci-airflow logs job/tenant-ci-airflow-run-airflow-migrations --all-containers --tail=200 --previous || true
-            kubectl -n tenant-ci-airflow logs job/tenant-ci-airflow-run-airflow-migrations --all-containers --tail=200 || true
+            # `kubectl logs job/<name> --all-containers --previous` came back completely empty in
+            # runs #21 and #22 despite the container visibly crash-looping (confirmed via events) -
+            # likely --all-containers plus the job/ shorthand doesn't resolve the way you'd expect
+            # with --previous, and any real kubectl-side error was being swallowed by `|| true`.
+            # Resolve the actual pod name and container explicitly instead, and surface stderr
+            # (2>&1) so a real error is visible rather than silently discarded.
+            MIGRATIONS_POD=$(kubectl -n tenant-ci-airflow get pods -l job-name=tenant-ci-airflow-run-airflow-migrations -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            echo "migrations pod: ${MIGRATIONS_POD:-<none found>}"
+            if [ -n "${MIGRATIONS_POD:-}" ]; then
+              echo "--- previous attempt ---"
+              kubectl -n tenant-ci-airflow logs "$MIGRATIONS_POD" -c run-airflow-migrations --tail=200 --previous 2>&1 || true
+              echo "--- current attempt ---"
+              kubectl -n tenant-ci-airflow logs "$MIGRATIONS_POD" -c run-airflow-migrations --tail=200 2>&1 || true
+            fi
             kubectl -n tenant-ci-airflow get events --sort-by=.lastTimestamp | tail -n 40 || true
             echo "::endgroup::"
           }
