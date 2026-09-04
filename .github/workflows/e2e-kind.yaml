@@ -330,9 +330,17 @@ jobs:
 
       - name: deploy tenant-ci Airflow
         run: |
+          # --namespace here matters, not just cosmetically: charts/airflow-tenant's own templates
+          # (SecretStore, dag-loader Job, dags PVC, postgres ExternalSecrets) key off
+          # .Release.Namespace, which defaults to "default" when helm template is run without it -
+          # and postgres-lite's StatefulSet sets no namespace at all, so it follows kubectl's own
+          # target instead. Confirmed failure mode without both flags: everything applied cleanly,
+          # but into the "default" namespace, so the very next step's
+          # `kubectl -n tenant-ci-airflow rollout status statefulset/tenant-ci-airflow-postgres`
+          # got "not found".
           helm dependency build charts/airflow-tenant
-          helm template tenant-ci-airflow charts/airflow-tenant -f ci/values-airflow-ci.yaml \
-            | kubectl apply --server-side -f -
+          helm template tenant-ci-airflow charts/airflow-tenant --namespace tenant-ci-airflow -f ci/values-airflow-ci.yaml \
+            | kubectl apply --server-side -n tenant-ci-airflow -f -
 
       - name: wait for postgres + ExternalSecrets + Airflow components
         run: |
@@ -346,7 +354,8 @@ jobs:
           [ "$ok" = "True" ] || { kubectl -n tenant-ci-airflow get externalsecret -o yaml; exit 1; }
           kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-scheduler --timeout=300s
           kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-dag-processor --timeout=300s
-          kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-triggerer --timeout=300s || true
+          # triggerer is a StatefulSet in this chart (confirmed from the apply output), not a Deployment
+          kubectl -n tenant-ci-airflow rollout status statefulset/tenant-ci-airflow-triggerer --timeout=300s || true
 
       - name: seed the DAGs PVC directly (no tenant repo to clone from in CI)
         run: |
