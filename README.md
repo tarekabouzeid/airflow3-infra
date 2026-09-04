@@ -25,13 +25,16 @@ Kubernetes, managed by a central Argo CD**, running entirely on local KIND clust
 
 ## Status
 
-Implemented. Built and validated without local Docker/Kubernetes access - GitHub Actions
-(`.github/workflows/e2e-kind.yaml`) is the primary correctness check: it stands up a real Argo
-CD, real Vault, real External Secrets Operator, real Spark Operator, and a real Airflow
-deployment on a kind cluster, and runs both integration DAGs to completion. See
-[`docs/architecture.md`](docs/architecture.md) for the as-built design and every place it
-deviates from the original plan, and [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
-for the original approved design.
+Implemented, built and iterated on entirely through GitHub Actions - this environment has no local
+Docker/Kubernetes access, so `.github/workflows/e2e-kind.yaml` is the real verification loop: it
+stands up a real Argo CD, real Vault, real External Secrets Operator, real Spark Operator, and a
+real Airflow deployment on a kind cluster. As of the last CI iteration it reaches a healthy,
+fully-migrated Airflow (scheduler/api-server/dag-processor/triggerer all passing their startup
+probes); running the two integration DAGs to completion has not yet been confirmed green end to
+end - see the workflow's own run history for the current state, and don't take this README's word
+for it over a real run. See [`docs/architecture.md`](docs/architecture.md) for the as-built design
+and every place it deviates from the original plan, and
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the original approved design.
 
 **To run the full 3-cluster lab locally:** [`docs/runbook-bootstrap.md`](docs/runbook-bootstrap.md).
 **To rehearse an Argo CD upgrade:** [`docs/runbook-argocd-upgrade.md`](docs/runbook-argocd-upgrade.md).

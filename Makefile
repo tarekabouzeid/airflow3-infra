@@ -78,7 +78,10 @@ ui-argocd:
 
 ui-airflow:
 	@if [ -z "$(TENANT)" ]; then echo "usage: make ui-airflow TENANT=tenant-a"; exit 1; fi
-	kubectl --context kind-af-work-a -n $(TENANT)-airflow port-forward svc/$(TENANT)-airflow-api-server 8081:8080
+	@home_cluster=$$(grep -A1 '^homeCluster:' platform/tenants/$(TENANT)/tenant.yaml | grep 'name:' | awk '{print $$2}'); \
+	if [ -z "$$home_cluster" ]; then echo "could not find homeCluster.name in platform/tenants/$(TENANT)/tenant.yaml"; exit 1; fi; \
+	echo "$(TENANT)'s home cluster is $$home_cluster"; \
+	kubectl --context kind-$$home_cluster -n $(TENANT)-airflow port-forward svc/$(TENANT)-airflow-api-server 8081:8080
 
 lint:
 	@echo "Linting charts..."
