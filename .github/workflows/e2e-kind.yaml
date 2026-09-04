@@ -347,6 +347,12 @@ jobs:
           set -euo pipefail
           dump_diag() {
             echo "::group::diagnostics"
+            # node-wide CPU/memory allocation breakdown - the last few failures were "Insufficient
+            # cpu" scheduling errors, and this is the only way to see what's actually consuming the
+            # single KIND node's allocatable capacity (Argo CD/Vault/ESO/Spark Operator/kube-system
+            # all share this one node with tenant-ci-airflow) instead of guessing at it.
+            kubectl describe node ci-control-plane | sed -n '/Capacity/,/Events/p' || true
+            kubectl get pods -A -o=custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,CPU-REQ:.spec.containers[*].resources.requests.cpu,MEM-REQ:.spec.containers[*].resources.requests.memory' || true
             kubectl -n tenant-ci-airflow get externalsecret -o wide || true
             kubectl -n tenant-ci-airflow get secretstore -o yaml || true
             kubectl -n tenant-ci-airflow get pods -o wide || true
