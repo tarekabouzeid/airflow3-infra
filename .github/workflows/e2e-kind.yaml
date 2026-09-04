@@ -76,11 +76,23 @@ jobs:
 
       - name: add chart repos
         run: |
-          helm repo add argo "${ARGOCD_CHART_REPO}"
-          helm repo add apache-airflow "${AIRFLOW_CHART_REPO}"
-          helm repo add external-secrets "${ESO_CHART_REPO}"
-          helm repo add hashicorp "${VAULT_CHART_REPO}"
-          helm repo add spark-operator "${SPARK_OPERATOR_CHART_REPO}"
+          # Transient network blips fetching a chart index (connection reset, timeout) have been
+          # observed on this runner pool - retry each add a few times before failing the whole job
+          # over what is usually a few-second hiccup.
+          add_repo() {
+            local name=$1 url=$2
+            for i in 1 2 3; do
+              helm repo add "$name" "$url" && return 0
+              echo "helm repo add $name failed (attempt $i/3), retrying in 5s..."
+              sleep 5
+            done
+            return 1
+          }
+          add_repo argo "${ARGOCD_CHART_REPO}"
+          add_repo apache-airflow "${AIRFLOW_CHART_REPO}"
+          add_repo external-secrets "${ESO_CHART_REPO}"
+          add_repo hashicorp "${VAULT_CHART_REPO}"
+          add_repo spark-operator "${SPARK_OPERATOR_CHART_REPO}"
           helm repo update
 
       - name: install Argo CD (pinned start-of-upgrade-path version)
