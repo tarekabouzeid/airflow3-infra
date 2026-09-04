@@ -86,9 +86,14 @@ airflow:
 
   logs:
     persistence:
-      enabled: true
-      size: 2Gi
-      storageClassName: standard
+      # The chart hardcodes its logs PVC to ReadWriteMany (no accessMode override key exists in
+      # its values schema - confirmed by CI: "additional properties 'accessMode' not allowed" at
+      # /logs/persistence). KIND's local-path StorageClass only provisions ReadWriteOnce/ROX, so a
+      # persistent+shared logs volume can never be satisfied on this project's single-node
+      # clusters (see docs/architecture.md). Disabled rather than worked around: task logs stay
+      # local to whichever pod wrote them, which is a real limitation of this lab (not wired up
+      # for remote logging), not a workaround for a CI-only constraint.
+      enabled: false
 
   # `name` here is a PREFIX, not a literal name - the chart appends "-<component>" per
   # component (e.g. "tenant-a-airflow-scheduler"). See vaultServiceAccountName above and

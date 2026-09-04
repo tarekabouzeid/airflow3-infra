@@ -39,14 +39,9 @@ airflow:
       enabled: true
       existingClaim: tenant-ci-dags
       accessMode: ReadWriteOnce
-  logs:
-    persistence:
-      # Chart default is ReadWriteMany; KIND's local-path StorageClass only provisions RWO.
-      # Confirmed failure: "failed to provision volume with StorageClass \"standard\": NodePath
-      # only supports ReadWriteOnce and ReadWriteOncePod (1.22+) access modes". Every cluster in
-      # this project is single-node (see docs/architecture.md), so RWO is sufficient - all pods
-      # mounting logs land on the same node.
-      accessMode: ReadWriteOnce
+  # logs.persistence is disabled by charts/airflow-tenant/values.yaml's own default (the chart
+  # hardcodes that PVC to ReadWriteMany, which KIND's local-path StorageClass can't provision -
+  # see the comment there), so no override is needed here.
   # Chart defaults size each component for a real cluster (e.g. scheduler/triggerer request
   # limits.cpu=2 each) - on the GitHub Actions runner these blew straight through the tenant's
   # 4-CPU ResourceQuota before postgres or the scheduler could even be admitted. Confirmed

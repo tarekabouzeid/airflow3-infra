@@ -20,6 +20,14 @@ Every cluster is single-node: the DAGs PVC uses the default `local-path` (ReadWr
 class and is mounted by every Airflow component including ephemeral KubernetesExecutor worker
 pods - RWO only works when every pod lands on the same node.
 
+The official Airflow chart's persistent logs volume (`logs.persistence`) is disabled for the same
+reason, but cannot simply be pinned to ReadWriteOnce like the DAGs PVC: the chart hardcodes that
+PVC's access mode to ReadWriteMany with no values-schema key to override it (confirmed: `helm
+template` rejects `logs.persistence.accessMode` as an unknown property), and `local-path` only
+provisions ReadWriteOnce/ReadWriteOncePod. With it disabled, each task's logs live only in the pod
+that produced them and are lost once that pod is gone - a real limitation of this lab, not
+currently worked around with remote logging (e.g. S3/GCS), which would be the production fix.
+
 ## Argo CD strategy
 
 - **Bootstrap** (`scripts/30-install-argocd.sh`): one `helm install` on af-mgmt, then one
