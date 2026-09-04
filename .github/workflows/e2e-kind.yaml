@@ -95,26 +95,39 @@ jobs:
         run: |
           kubectl apply -f platform/bootstrap/app-argocd-self.yaml
           kubectl apply -f platform/bootstrap/vault-af-mgmt.yaml
-          echo "waiting for the 'vault' Application to become Synced+Healthy..."
+          # Only wait for Synced here, deliberately NOT Healthy: a fresh, non-dev-mode Vault
+          # starts sealed and uninitialized by design, so its readiness probe (`vault status`,
+          # which the chart uses directly) - and therefore Argo CD's health check - cannot pass
+          # until AFTER the "vault init + unseal" step below runs. Gating on Healthy here would
+          # deadlock forever. Health is verified later, after Vault is actually unsealed.
+          echo "waiting for the 'vault' Application to become Synced..."
+          sync=""
           for i in $(seq 1 60); do
             sync=$(kubectl -n argocd get application vault -o jsonpath='{.status.sync.status}' 2>/dev/null || true)
             health=$(kubectl -n argocd get application vault -o jsonpath='{.status.health.status}' 2>/dev/null || true)
-            echo "  [$i] sync=$sync health=$health"
-            [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ] && break
-            sleep 10
+            echo "  [$i] sync=$sync health=$health (health is informational only at this stage)"
+            [ "$sync" = "Synced" ] && break
+            sleep 5
           done
-          if ! { [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ]; }; then
+          if [ "$sync" != "Synced" ]; then
             echo "::group::vault Application"
             kubectl -n argocd get application vault -o yaml
             echo "::endgroup::"
+            exit 1
+          fi
+          echo "waiting for the vault-0 pod to exist and reach Running phase (not necessarily Ready)..."
+          for i in $(seq 1 60); do
+            phase=$(kubectl -n vault get pod vault-0 -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            echo "  [$i] vault-0 phase=$phase"
+            [ "$phase" = "Running" ] && break
+            sleep 5
+          done
+          if [ "$phase" != "Running" ]; then
             echo "::group::vault pods"
             kubectl -n vault get pods -o wide || true
             echo "::endgroup::"
             echo "::group::vault-0 describe"
             kubectl -n vault describe pod vault-0 || true
-            echo "::endgroup::"
-            echo "::group::vault-0 logs"
-            kubectl -n vault logs vault-0 --all-containers --tail=100 || true
             echo "::endgroup::"
             echo "::group::vault namespace events"
             kubectl -n vault get events --sort-by=.lastTimestamp || true
@@ -141,6 +154,17 @@ jobs:
           KEY=$(jq -r '.unseal_keys_b64[0]' /tmp/vault-keys.json)
           kubectl -n vault exec -i vault-0 -- vault operator unseal "$KEY"
           echo "ROOT_TOKEN=${ROOT_TOKEN}" >> "$GITHUB_ENV"
+
+      - name: confirm vault-0 becomes Ready now that it's unsealed (proves the readiness probe + Argo CD health wiring, not just kubectl exec access)
+        run: |
+          set -euo pipefail
+          if kubectl -n vault wait --for=condition=Ready pod/vault-0 --timeout=90s; then
+            echo "vault-0 is Ready."
+          else
+            echo "::error::vault-0 did not become Ready even after unsealing - investigate the readiness probe itself, not the seal state."
+            kubectl -n vault describe pod vault-0
+            exit 1
+          fi
 
       - name: configure vault (kubernetes auth, KV mount, policies, roles, seed secrets)
         run: |
