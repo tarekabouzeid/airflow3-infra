@@ -358,6 +358,12 @@ jobs:
             kubectl -n tenant-ci-airflow get pods -o wide || true
             kubectl -n tenant-ci-airflow describe pod -l app.kubernetes.io/name=postgres || true
             kubectl -n tenant-ci-airflow logs -l app.kubernetes.io/name=postgres --all-containers --tail=100 || true
+            # postgres itself is confirmed healthy as of run #19 - the new blocker is
+            # run-airflow-migrations crash-looping (every other component's
+            # wait-for-airflow-migrations init container just polls for this job's success), so
+            # dump its actual logs directly instead of guessing why `airflow db migrate` fails.
+            kubectl -n tenant-ci-airflow describe job tenant-ci-airflow-run-airflow-migrations || true
+            kubectl -n tenant-ci-airflow logs job/tenant-ci-airflow-run-airflow-migrations --all-containers --tail=200 || true
             kubectl -n tenant-ci-airflow get events --sort-by=.lastTimestamp | tail -n 40 || true
             echo "::endgroup::"
           }
