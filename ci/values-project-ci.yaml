@@ -2,3 +2,17 @@ scope: namespace
 tenant: tenant-ci
 namespace: tenant-ci-airflow
 isWorkloadNamespace: false
+# The chart's default LimitRange (1 CPU / 1Gi per unspecified container - see
+# charts/tenant-project/values.yaml) is sane for a real cluster, but this namespace's containers
+# include several this CI fixture doesn't set explicit resources for (e.g. the official airflow
+# chart's per-component logGroomerSidecar containers) - each would otherwise silently default to
+# a full CPU, which alone exceeds what a GitHub Actions runner's single KIND node has available.
+# Confirmed failure: "0/1 nodes are available: 1 Insufficient cpu" while the namespace's own
+# ResourceQuota still had headroom, and a FailedCreate event showing a pod requesting
+# limits.cpu=1300m when every explicit override in ci/values-airflow-ci.yaml caps that
+# component's main container at 300m (300m + this LimitRange's old 1000m default = 1300m).
+limitRange:
+  defaultRequestCPU: 20m
+  defaultRequestMemory: 32Mi
+  defaultLimitCPU: 150m
+  defaultLimitMemory: 128Mi
