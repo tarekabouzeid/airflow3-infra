@@ -32,6 +32,18 @@ spec:
           env:
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            # Kubernetes only expands $(VAR) references (used below in the probes) for names
+            # declared in this container's own env[] list - never for envFrom-imported ones, even
+            # though they're the same variable at runtime. Without this, pg_isready received the
+            # literal, unexpanded string "$(POSTGRES_USER)" as its -U argument and the postgres
+            # pod never became ready (confirmed: 'FATAL: role "$(POSTGRES_USER)" does not exist'
+            # repeating in its logs). Re-declaring it here (same secret key) makes it expandable
+            # without duplicating the value anywhere.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret | default (printf "%s-postgres-credentials" .Values.global.tenant) }}
+                  key: POSTGRES_USER
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
