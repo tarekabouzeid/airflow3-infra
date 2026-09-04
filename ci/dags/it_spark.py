@@ -2,10 +2,11 @@
 locally and once against a remote cluster. Submits spark-pi via spark/spark_pi.yaml and waits for
 completion with SparkKubernetesSensor.
 
-NOTE: SparkKubernetesOperator's exact constructor arguments have changed across
-apache-airflow-providers-cncf-kubernetes releases. This DAG is verified against the pinned
-provider version by e2e-kind.yaml, which actually submits and waits for both SparkApplications -
-treat a CI failure here as this file needing an update for the current provider API, not a flake.
+NOTE: unlike KubernetesPodOperator, neither SparkKubernetesOperator nor SparkKubernetesSensor
+accepts an `in_cluster` kwarg directly - only `kubernetes_conn_id` (default "kubernetes_default").
+For the local tasks we deliberately pass no connection at all: KubernetesHook's own fallback for
+the literal "kubernetes_default" conn id is an empty Connection, which resolves to in-cluster
+config automatically (verified against the installed provider's source, not assumed).
 """
 from datetime import datetime, timezone
 
@@ -38,13 +39,11 @@ with DAG(
         application_file="spark/spark_pi.yaml",
         params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT, "suffix": "local-{{ ts_nodash | lower }}"},
         do_xcom_push=True,
-        in_cluster=True,
     )
     wait_local = SparkKubernetesSensor(
         task_id="wait_local",
         namespace=NAMESPACE,
         application_name="{{ task_instance.xcom_pull(task_ids='submit_local')['metadata']['name'] }}",
-        in_cluster=True,
     )
 
     submit_remote = SparkKubernetesOperator(

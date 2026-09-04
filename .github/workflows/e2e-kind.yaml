@@ -103,7 +103,24 @@ jobs:
             [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ] && break
             sleep 10
           done
-          [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ] || { kubectl -n argocd get application vault -o yaml; exit 1; }
+          if ! { [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ]; }; then
+            echo "::group::vault Application"
+            kubectl -n argocd get application vault -o yaml
+            echo "::endgroup::"
+            echo "::group::vault pods"
+            kubectl -n vault get pods -o wide || true
+            echo "::endgroup::"
+            echo "::group::vault-0 describe"
+            kubectl -n vault describe pod vault-0 || true
+            echo "::endgroup::"
+            echo "::group::vault-0 logs"
+            kubectl -n vault logs vault-0 --all-containers --tail=100 || true
+            echo "::endgroup::"
+            echo "::group::vault namespace events"
+            kubectl -n vault get events --sort-by=.lastTimestamp || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: install External Secrets Operator + Spark Operator (plain helm, in-cluster)
         run: |
