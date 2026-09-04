@@ -39,6 +39,52 @@ airflow:
       enabled: true
       existingClaim: tenant-ci-dags
       accessMode: ReadWriteOnce
+  logs:
+    persistence:
+      # Chart default is ReadWriteMany; KIND's local-path StorageClass only provisions RWO.
+      # Confirmed failure: "failed to provision volume with StorageClass \"standard\": NodePath
+      # only supports ReadWriteOnce and ReadWriteOncePod (1.22+) access modes". Every cluster in
+      # this project is single-node (see docs/architecture.md), so RWO is sufficient - all pods
+      # mounting logs land on the same node.
+      accessMode: ReadWriteOnce
+  # Chart defaults size each component for a real cluster (e.g. scheduler/triggerer request
+  # limits.cpu=2 each) - on the GitHub Actions runner these blew straight through the tenant's
+  # 4-CPU ResourceQuota before postgres or the scheduler could even be admitted. Confirmed
+  # failure: "exceeded quota: tenant-ci-quota, requested: limits.cpu=2, used: limits.cpu=4,
+  # limited: limits.cpu=4". Scaled down for this smoke test only - the quota mechanics themselves
+  # (and the real per-tenant defaults in charts/tenant-project/values.yaml) are unchanged.
+  scheduler:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 300m, memory: 512Mi}
+  dagProcessor:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 300m, memory: 512Mi}
+  apiServer:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 300m, memory: 512Mi}
+  triggerer:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 300m, memory: 512Mi}
+  workers:
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: 300m, memory: 512Mi}
+  statsd:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 100m, memory: 128Mi}
+  createUserJob:
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 300m, memory: 256Mi}
+  migrateDatabaseJob:
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: 300m, memory: 256Mi}
   env:
     - name: AIRFLOW__SECRETS__BACKEND
       value: "airflow.providers.hashicorp.secrets.vault.VaultBackend"
