@@ -55,26 +55,34 @@ airflow:
   # workload exists - leaving well under 1 CPU of real scheduling headroom for the whole
   # tenant-ci-airflow stack. Scheduling admission is decided on requests, not limits, so limits
   # can stay comfortable while requests stay minimal.
+  #
+  # limits.cpu was raised again (300m -> 1000m) after the memory fix above got the migrations job
+  # completing: scheduler/dag-processor/api-server/triggerer then all failed their startup/liveness
+  # probes with "command timed out ... timed out after 20s" running `airflow jobs check` - CPU
+  # throttling under real contention (many Airflow components starting at once on a shared 2-CPU
+  # node), not a code or config problem. Raising the LIMIT (not the request) costs nothing in
+  # scheduling budget - only requests count toward node admission - but lets each container burst
+  # to the CPU it needs during startup instead of being throttled by the CFS quota.
   scheduler:
     resources:
       requests: {cpu: 50m, memory: 256Mi}
-      limits: {cpu: 300m, memory: 512Mi}
+      limits: {cpu: 1000m, memory: 512Mi}
   dagProcessor:
     resources:
       requests: {cpu: 50m, memory: 256Mi}
-      limits: {cpu: 300m, memory: 512Mi}
+      limits: {cpu: 1000m, memory: 512Mi}
   apiServer:
     resources:
       requests: {cpu: 50m, memory: 256Mi}
-      limits: {cpu: 300m, memory: 512Mi}
+      limits: {cpu: 1000m, memory: 512Mi}
   triggerer:
     resources:
       requests: {cpu: 50m, memory: 256Mi}
-      limits: {cpu: 300m, memory: 512Mi}
+      limits: {cpu: 1000m, memory: 512Mi}
   workers:
     resources:
       requests: {cpu: 50m, memory: 256Mi}
-      limits: {cpu: 300m, memory: 512Mi}
+      limits: {cpu: 1000m, memory: 512Mi}
   statsd:
     resources:
       requests: {cpu: 20m, memory: 64Mi}
@@ -82,7 +90,7 @@ airflow:
   createUserJob:
     resources:
       requests: {cpu: 50m, memory: 128Mi}
-      limits: {cpu: 300m, memory: 512Mi}
+      limits: {cpu: 1000m, memory: 512Mi}
   # run-airflow-migrations crashes with zero stdout/stderr on every attempt (confirmed: both
   # `kubectl logs --previous` and the current attempt come back completely empty despite the
   # container visibly restarting) - a container dying with no output at all, even with
