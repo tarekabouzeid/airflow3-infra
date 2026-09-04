@@ -345,13 +345,28 @@ jobs:
       - name: wait for postgres + ExternalSecrets + Airflow components
         run: |
           set -euo pipefail
-          kubectl -n tenant-ci-airflow rollout status statefulset/tenant-ci-airflow-postgres --timeout=180s
+          dump_diag() {
+            echo "::group::diagnostics"
+            kubectl -n tenant-ci-airflow get externalsecret -o wide || true
+            kubectl -n tenant-ci-airflow get secretstore -o yaml || true
+            kubectl -n tenant-ci-airflow get pods -o wide || true
+            kubectl -n tenant-ci-airflow describe pod -l app.kubernetes.io/name=postgres || true
+            kubectl -n tenant-ci-airflow logs -l app.kubernetes.io/name=postgres --all-containers --tail=100 || true
+            kubectl -n tenant-ci-airflow get events --sort-by=.lastTimestamp | tail -n 40 || true
+            echo "::endgroup::"
+          }
+          trap dump_diag ERR
+          # the postgres-lite pod needs POSTGRES_USER/PASSWORD/DB from the ExternalSecret-synced
+          # Secret to even start, so that must be Ready before waiting on the pod itself - waiting
+          # on the pod first (as this step used to) just burns the whole rollout timeout hiding
+          # whatever ESO/Vault problem is actually blocking it.
           for i in $(seq 1 60); do
             ok=$(kubectl -n tenant-ci-airflow get externalsecret tenant-ci-airflow-metadata-conn -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
             [ "$ok" = "True" ] && break
             sleep 5
           done
-          [ "$ok" = "True" ] || { kubectl -n tenant-ci-airflow get externalsecret -o yaml; exit 1; }
+          [ "$ok" = "True" ] || { echo "::error::tenant-ci-airflow-metadata-conn ExternalSecret never became Ready"; kubectl -n tenant-ci-airflow get externalsecret -o yaml; exit 1; }
+          kubectl -n tenant-ci-airflow rollout status statefulset/tenant-ci-airflow-postgres --timeout=180s
           kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-scheduler --timeout=300s
           kubectl -n tenant-ci-airflow rollout status deployment/tenant-ci-airflow-dag-processor --timeout=300s
           # triggerer is a StatefulSet in this chart (confirmed from the apply output), not a Deployment
