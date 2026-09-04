@@ -87,10 +87,6 @@ airflow:
     resources:
       requests: {cpu: 50m, memory: 128Mi}
       limits: {cpu: 300m, memory: 256Mi}
-postgres-lite:
-  resources:
-    requests: {cpu: 50m, memory: 256Mi}
-    limits: {cpu: 500m, memory: 512Mi}
   env:
     - name: AIRFLOW__SECRETS__BACKEND
       value: "airflow.providers.hashicorp.secrets.vault.VaultBackend"
@@ -99,3 +95,7 @@ postgres-lite:
         {"connections_path":"connections","variables_path":"variables","config_path":null,
         "mount_point":"tenant-ci","auth_type":"kubernetes","kubernetes_role":"tenant-ci-airflow",
         "kubernetes_mount_point":"kubernetes-ci","url":"http://vault.vault.svc:8200"}
+postgres-lite:
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
