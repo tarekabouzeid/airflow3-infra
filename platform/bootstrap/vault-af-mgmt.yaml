@@ -41,6 +41,20 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: vault
+  # Confirmed via `helm template` vs the live object (see docs/troubleshooting.md): the API server
+  # back-fills apiVersion/kind/status and spec.volumeMode onto each StatefulSet
+  # volumeClaimTemplates entry, none of which the chart's manifest ever sets, so Argo CD's diffing
+  # sees a permanent (cosmetic) diff here. Left unignored, this caused a continuous selfHeal
+  # resync loop on this Application (and root, which watches it) that starved other Applications'
+  # reconciliation of controller attention.
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates/0/apiVersion
+        - /spec/volumeClaimTemplates/0/kind
+        - /spec/volumeClaimTemplates/0/status
+        - /spec/volumeClaimTemplates/0/spec/volumeMode
   syncPolicy:
     automated:
       prune: true

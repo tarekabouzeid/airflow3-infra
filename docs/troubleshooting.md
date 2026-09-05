@@ -44,15 +44,18 @@ token). If the workload-runner ServiceAccount itself is missing, its owning Appl
 
 **The `vault` Application's StatefulSet stays permanently `OutOfSync`, even though Vault is
 clearly up and every other resource in the Application shows `Synced`.**
-Observed on the pinned start-of-upgrade Argo CD version (chart 7.8.x): the API server
-auto-populates a StatefulSet default field this Argo CD version's diffing doesn't normalize away,
-so Argo CD sees a permanent cosmetic diff on that one resource. It does not mean Vault is broken -
-confirm directly with `kubectl -n vault get pod vault-0` and `vault status` via `kubectl exec`
-rather than trusting the Application's sync status for this specific resource. `e2e-kind.yaml`
-checks pod state directly for exactly this reason rather than waiting on Argo CD's sync status.
-If this bothers you enough to fix properly (rather than ignore), find the exact diffed field with
-`argocd app diff vault` and add it to `spec.ignoreDifferences` on the Application - do not guess
-the field name and add an `ignoreDifferences` entry speculatively; confirm it first.
+Confirmed root cause (via `helm template` vs. the live object - see
+`platform/bootstrap/vault-af-mgmt.yaml`): the API server back-fills `apiVersion`, `kind`, `status`,
+and `spec.volumeMode` onto each StatefulSet `volumeClaimTemplates` entry, none of which the Vault
+chart's manifest ever sets, so Argo CD's diffing sees a permanent cosmetic diff on that one field.
+Fixed with a targeted `ignoreDifferences` entry on the `vault` Application (confirmed via the
+`helm template` diff first, not guessed). Left unfixed, this isn't just cosmetic in a real local
+run: the continuous selfHeal resync it triggers (and propagates up to `root`, which watches every
+child Application) can starve the application-controller's attention on other Applications enough
+to visibly stall their own sync progress - if a tenant Application's sync looks permanently stuck
+on `Running` for no clear reason, check `kubectl -n argocd logs statefulset/argocd-application-
+controller` for `vault`/`root` churn crowding it out before assuming the tenant Application itself
+is broken.
 
 **Argo CD Application flips to `Unknown` health mid Argo-CD-upgrade.**
 Expected - see `docs/runbook-argocd-upgrade.md`. The application-controller restarts itself
