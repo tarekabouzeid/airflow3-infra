@@ -25,18 +25,23 @@ Kubernetes, managed by a central Argo CD**, running entirely on local KIND clust
 
 ## Status
 
-Bootstrapped and run end to end on a real local 3-cluster lab (not just CI). Argo CD, Vault, ESO,
-Spark Operator, and both tenants' full Airflow stack (api-server/scheduler/dag-processor/
-triggerer/postgres) are healthy on both clusters. `it_kubernetes_pod_operator` passes for both
-tenants, local and cross-cluster. `it_spark`'s own bugs are fixed and each fix verified directly
-(SparkApplications complete in both clusters), but a fully automated `make test-integration` run
-can still be disrupted by an open Argo CD issue: `tenant-a-airflow`/`tenant-b-airflow` sit
-persistently `OutOfSync` with `selfHeal: true`, so periodic re-syncs regenerate hook-created
-Secrets and can invalidate an in-flight task - see
-[`docs/troubleshooting.md`](docs/troubleshooting.md) for what's confirmed so far. See
-[`docs/architecture.md`](docs/architecture.md) for the as-built design and every place it deviates
-from the original plan, and [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the
-original approved design.
+Bootstrapped and run end to end on a real local 3-cluster lab (not just CI).
+
+| Component | Status |
+|---|---|
+| Argo CD, Vault, ESO, Spark Operator | Healthy, both clusters |
+| Tenant A / B Airflow (api-server, scheduler, dag-processor, triggerer, postgres) | Healthy, both clusters |
+| `it_kubernetes_pod_operator` (local + cross-cluster) | Passing, both tenants |
+| `it_spark` (local + cross-cluster) | Bugs fixed, each fix verified directly; `make test-integration` can still be disrupted - see below |
+
+**Open issue:** `tenant-a-airflow`/`tenant-b-airflow` sit persistently `OutOfSync` with
+`selfHeal: true`, so Argo CD periodically re-syncs them, regenerating hook-created Secrets and
+occasionally invalidating an in-flight task. Root cause not yet isolated - see
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
+
+See [`docs/architecture.md`](docs/architecture.md) for the as-built design and every place it
+deviates from the original plan, and
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the original approved design.
 
 ## Versions
 
@@ -56,13 +61,24 @@ original approved design.
 
 ## Local access
 
-After `make bootstrap` (see the runbook):
+`make bootstrap` ends by running `bash scripts/95-port-forward.sh`, which forwards all three UIs
+in the background and keeps running after the command that started it exits. Run it again
+standalone any time (already bootstrapped, forwards died, whatever) - it's idempotent, stopping
+anything it previously started before relaunching:
 
-| UI | Command | URL | Login |
-|---|---|---|---|
-| Argo CD | `make ui-argocd` | http://localhost:8080 | `admin` / `kubectl --context kind-af-mgmt -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
-| Tenant A Airflow | `make ui-airflow TENANT=tenant-a` | http://localhost:8081 | `admin` / `admin` (chart default) |
-| Tenant B Airflow | `make ui-airflow TENANT=tenant-b PORT=8082` | http://localhost:8082 | `admin` / `admin` (chart default) |
+```bash
+make port-forward         # (re)start all three
+make port-forward-stop    # stop them
+```
+
+| UI | URL | Login |
+|---|---|---|
+| Argo CD | http://localhost:8080 | `admin` / `kubectl --context kind-af-mgmt -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
+| Tenant A Airflow | http://localhost:8081 | `admin` / `admin` (chart default) |
+| Tenant B Airflow | http://localhost:8082 | `admin` / `admin` (chart default) |
+
+Forwarding just one tenant on a specific port also still works directly:
+`make ui-airflow TENANT=tenant-a PORT=8081`.
 
 **To run the full 3-cluster lab locally:** [`docs/runbook-bootstrap.md`](docs/runbook-bootstrap.md).
 **To rehearse an Argo CD upgrade:** [`docs/runbook-argocd-upgrade.md`](docs/runbook-argocd-upgrade.md).

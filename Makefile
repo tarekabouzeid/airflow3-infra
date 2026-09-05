@@ -12,7 +12,7 @@ PORT ?= 8081
 .PHONY: help preflight clusters teardown-clusters local-registry \
         bootstrap install-argocd vault-init vault-configure remote-access \
         seed-tenant-secrets status test-integration upgrade-argocd \
-        ui-argocd ui-airflow lint teardown images
+        ui-argocd ui-airflow port-forward port-forward-stop lint teardown images
 
 help:
 	@echo "Common targets:"
@@ -25,6 +25,9 @@ help:
 	@echo "  make remote-access      - wire remote-cluster kubeconfigs into Vault per tenant"
 	@echo "  make status             - show Application sync/health across all tenants"
 	@echo "  make test-integration   - run the 2 integration DAGs for every tenant"
+	@echo "  make port-forward       - forward Argo CD + both tenants' Airflow UIs to localhost"
+	@echo "                            (also runs automatically at the end of bootstrap)"
+	@echo "  make port-forward-stop  - stop them"
 	@echo "  make upgrade-argocd VERSION=<chart-version> - bump Argo CD via GitOps"
 	@echo "  make lint               - helm lint/template + kubeconform + policy checks"
 	@echo "  make teardown           - delete all 3 kind clusters"
@@ -48,6 +51,7 @@ install-argocd:
 
 bootstrap: preflight clusters local-registry images install-argocd
 	bash scripts/40-register-clusters.sh
+	bash scripts/95-port-forward.sh
 	@echo "Bootstrap complete. Run 'make vault-init' next."
 
 vault-init:
@@ -85,6 +89,12 @@ ui-airflow:
 	if [ -z "$$home_cluster" ]; then echo "could not find homeCluster.name in platform/tenants/$(TENANT)/tenant.yaml"; exit 1; fi; \
 	echo "$(TENANT)'s home cluster is $$home_cluster, forwarding to localhost:$(PORT)"; \
 	kubectl --context kind-$$home_cluster -n $(TENANT)-airflow port-forward svc/$(TENANT)-airflow-api-server $(PORT):8080
+
+port-forward:
+	bash scripts/95-port-forward.sh
+
+port-forward-stop:
+	bash scripts/95-port-forward.sh stop
 
 lint:
 	@echo "Linting charts..."
