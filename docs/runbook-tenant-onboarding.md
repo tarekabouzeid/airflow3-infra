@@ -7,6 +7,7 @@ action, in the platform repo, and it is deliberately small.
 
 Same shape as `airflow3-infra-tenant-a`/`-b`:
 ```
+CLAUDE.md                        # tenant-scoped Claude Code context - keep this, don't skip it
 deploy/airflow/values.yaml      # image tag + resource overrides only
 deploy/workloads/                # Helm chart: SecretStore + ExternalSecret for workload secrets
 dags/
@@ -17,7 +18,10 @@ tests/test_dags_import.py
 .github/workflows/{lint.yaml,dag-validate.yaml}
 ```
 Easiest path: copy an existing tenant repo and rename every `tenant-a`/`tenant-b` occurrence to
-the new tenant name (`grep -rl tenant-a . | xargs sed -i 's/tenant-a/tenant-c/g'`).
+the new tenant name (`grep -rl tenant-a . | xargs sed -i 's/tenant-a/tenant-c/g'`) - this also
+updates the copied `CLAUDE.md`'s tenant name, home/remote cluster, and Vault mount point/role
+references, so double check it reads correctly for the new tenant rather than assuming the sed
+caught everything.
 
 ## 2. Add the tenant registry entry (platform repo)
 
