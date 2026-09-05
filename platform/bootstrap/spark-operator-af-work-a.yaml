@@ -13,7 +13,7 @@ spec:
   source:
     repoURL: https://kubeflow.github.io/spark-operator
     chart: spark-operator
-    targetRevision: "2.1.1"   # verified by CI against the real chart index; see versions.env
+    targetRevision: "2.5.2"   # verified locally against the real chart index (helm search repo); see versions.env
     helm:
       values: |
         spark:
@@ -22,10 +22,11 @@ spec:
             - tenant-b-workloads
         webhook:
           enable: false
-        resources:
-          requests:
-            cpu: 50m
-            memory: 128Mi
+        controller:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
   destination:
     server: https://af-work-a-control-plane:6443
     namespace: spark-operator
