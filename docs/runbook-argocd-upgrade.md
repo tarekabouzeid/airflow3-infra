@@ -31,9 +31,12 @@ spec:
       targetRevision: "8.3.7"   # <- bump this
 ```
 
-Commit, push, and either wait for `selfHeal` or force it:
+Commit and push, then sync manually - this Application deliberately has no `automated` sync
+policy (see its own comment: an unattended selfHeal firing mid-upgrade is what caused a real
+argocd-secret fight loop once), so nothing applies until you trigger it yourself:
 
 ```bash
+argocd app sync argocd   # or: Sync button in the UI
 kubectl --context kind-af-mgmt -n argocd get application argocd -w
 ```
 
@@ -63,6 +66,6 @@ look.
    you're comfortable with the mechanism - Argo CD's own release process supports upgrading
    across multiple minor versions at once within the same major line.
 
-Roll back the same way: set `targetRevision` back to the previous value, commit, let selfHeal
-apply it. There is no separate rollback mechanism to learn - it is the same GitOps action in
-reverse.
+Roll back the same way: set `targetRevision` back to the previous value, commit, push, then
+`argocd app sync argocd` again. There is no separate rollback mechanism to learn - it is the same
+GitOps action in reverse, just manually triggered like every other sync of this Application.

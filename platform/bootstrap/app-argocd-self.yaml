@@ -1,7 +1,7 @@
 # Argo CD manages itself. Upgrading Argo CD is then a GitOps action: bump targetRevision below,
-# commit, let this Application sync. See docs/runbook-argocd-upgrade.md for the full, safe
-# sequence (the app-controller restarts mid-sync; briefly seeing Progressing/Unknown here is
-# expected, not a failure).
+# commit, push, then sync manually (no `automated` policy here - see syncPolicy below). See
+# docs/runbook-argocd-upgrade.md for the full, safe sequence (the app-controller restarts
+# mid-sync; briefly seeing Progressing/Unknown here is expected, not a failure).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -16,11 +16,10 @@ spec:
   sources:
     - repoURL: https://argoproj.github.io/argo-helm
       chart: argo-cd
-      # Start of the upgrade rehearsal: v2.14.x. See versions.env and docs/runbook-argocd-upgrade.md.
-      # Rolled back from "10.8.0": that jump (v2.14.11 -> v3.x, one hop, skipping the documented
-      # incremental path) left the argocd-redis-secret-init PreSync hook wedged - a fresh sync got
-      # stuck waiting on a hook Job/Role/RoleBinding that didn't even exist anymore, every retry,
-      # confirmed live. Redo the upgrade through the intended hops instead (see the runbook).
+      # Upgrade rehearsal: started at v2.14.x (see versions.env / docs/runbook-argocd-upgrade.md),
+      # now on v3.5.2 - the argocd-redis-secret-init hook wedge that blocked this hop (a known
+      # upstream bug, argoproj/argo-helm#2887) is fixed via redisSecretInit.enabled: false in
+      # bootstrap/argocd-values.yaml; see that file's comment for detail.
       targetRevision: "10.8.0"
       helm:
         valueFiles:
@@ -32,13 +31,22 @@ spec:
     server: https://kubernetes.default.svc
     namespace: argocd
   syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
+    # No `automated` block, deliberately: Argo CD's own self-management is the one Application in
+    # this repo where an unattended selfHeal firing mid-upgrade is exactly what caused the
+    # argocd-secret fight loop above. Sync manually instead - `argocd app sync argocd` (or the UI)
+    # - once you've reviewed what's about to change, same as every other Application here except
+    # this one keeps that in your hands rather than firing on every git push automatically. Every
+    # OTHER platform Application in this repo keeps `automated: {prune: true, selfHeal: true}` -
+    # this exception is narrowly for argocd's own self-management.
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true   # Argo CD's own CRDs exceed the client-side-apply annotation limit
-      - Replace=true
+      # Replace=true (removed): confirmed live it fights argocd-server's own runtime writes to
+      # argocd-secret (server.secretkey, the admin password hash) - selfHeal saw those as drift
+      # from the chart's (empty) manifest for that Secret and Replace=true wholesale-wiped them
+      # right back out, in a tight loop, breaking login/session entirely ("server.secretkey is
+      # missing" in the UI). ServerSideApply=true alone already covers the actual reason
+      # Replace=true was added (the CRDs exceeding the client-side-apply annotation limit).
     retry:
       limit: 5
       backoff:
