@@ -151,6 +151,18 @@ self-heals once it does (the script also restarts
 the Deployment itself, since a Secret change alone doesn't make Headlamp re-read the mounted
 files) - the same "up but not yet usable" shape Vault has before `make vault-init`.
 
+`config.unsafeUseServiceAccountToken: true` is also set, deliberately. By default Headlamp asks
+every browser session to supply its own token before showing any cluster - confirmed live that
+af-work-a/af-work-b (kubeconfig-sourced, a bearer token already embedded) proxy fine with no
+per-user token at all, but af-mgmt (in-cluster) returns `403 system:anonymous` without one, and
+that in-cluster check is what gates Headlamp's whole login screen. This setting makes af-mgmt use
+the pod's own cluster-admin-bound ServiceAccount token the same way, removing the prompt entirely.
+The chart's own name for it ("UNSAFE...only safe behind an auth proxy") is about collapsing every
+user into one shared identity - a real concern for a shared or network-exposed instance, not for
+this one, which is only ever reached via `kubectl port-forward` to localhost by the one lab
+operator (the same threat model this repo already accepts elsewhere: cluster-admin SAs
+everywhere, tenant Airflow's `admin`/`admin` default login).
+
 ## Remote workload execution
 
 `scripts/70-remote-access.sh` mints a long-lived token for the `<tenant>-workload-runner`

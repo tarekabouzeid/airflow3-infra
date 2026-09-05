@@ -30,6 +30,18 @@ spec:
         config:
           inCluster: true
           inClusterContextName: "af-mgmt"
+          # Without this, every user hitting Headlamp is asked to paste their own token before it
+          # will show ANY cluster - confirmed live: af-work-a/af-work-b (kubeconfig-sourced, with
+          # a bearer token already embedded) proxy fine anonymously, but af-mgmt (in-cluster)
+          # returns 403 system:anonymous without one, and that's what gates Headlamp's overall
+          # login screen. This makes af-mgmt use the pod's own (cluster-admin-bound)
+          # ServiceAccount token instead, same as af-work-a/af-work-b already effectively do.
+          # The chart calls this "UNSAFE...only safe behind an auth proxy" because it collapses
+          # per-user identity into one shared identity - a real concern for a shared/exposed
+          # instance, but this Headlamp is only ever reached via `kubectl port-forward` to
+          # localhost by the one lab operator, same threat model this repo already accepts
+          # elsewhere (cluster-admin SAs everywhere, tenant Airflow's admin/admin default login).
+          unsafeUseServiceAccountToken: true
           # Confirmed live against a real 3-cluster lab: the `KUBECONFIG` env var is NOT read by
           # headlamp-server (its own `-h` output only has `-kubeconfig string`, and setting just
           # the env var left the pod logging "No kubeconfig set, using only the in-cluster
