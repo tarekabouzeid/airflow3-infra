@@ -21,7 +21,7 @@ spec:
       # incremental path) left the argocd-redis-secret-init PreSync hook wedged - a fresh sync got
       # stuck waiting on a hook Job/Role/RoleBinding that didn't even exist anymore, every retry,
       # confirmed live. Redo the upgrade through the intended hops instead (see the runbook).
-      targetRevision: "7.8.28"
+      targetRevision: "10.8.0"
       helm:
         valueFiles:
           - $values/bootstrap/argocd-values.yaml
