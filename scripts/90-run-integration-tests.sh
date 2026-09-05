@@ -29,6 +29,14 @@ run_dag() {
   local pod; pod="$(scheduler_pod "${ctx}" "${ns}")"
   [ -n "${pod}" ] || { log "[${tenant}] no scheduler pod found in ${ns}"; return 1; }
 
+  # DAGs are paused by default on first parse (dags_are_paused_at_creation) - a manually
+  # triggered run of a paused DAG still gets created (state=queued) but the scheduler's main
+  # loop never advances it, since it filters scheduling by is_paused=false regardless of how the
+  # run was created. Confirmed locally: every run sat "queued" for the full timeout until the DAG
+  # was unpaused by hand.
+  kubectl --context "${ctx}" -n "${ns}" exec "${pod}" -- \
+    airflow dags unpause "${dag_id}" >/dev/null
+
   local run_id; run_id="it-$(date +%s)"
   kubectl --context "${ctx}" -n "${ns}" exec "${pod}" -- \
     airflow dags trigger "${dag_id}" --run-id "${run_id}" >/dev/null
