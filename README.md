@@ -23,6 +23,24 @@ Kubernetes, managed by a central Argo CD**, running entirely on local KIND clust
 - **CI in GitHub Actions**: lint, policy checks, rendered-manifest diffs on PRs, a reduced
   single-cluster KIND smoke test, and a nightly Argo CD upgrade rehearsal.
 
+## Execution model: KubernetesExecutor, not Celery
+
+Each tenant's Airflow runs with the **KubernetesExecutor** — there is no Celery, no persistent
+worker pool, no message broker. Every task the scheduler dispatches becomes a fresh pod, created
+directly via the Kubernetes API, on the tenant's **home** cluster.
+
+"Remote" execution is not the executor reaching across clusters — it's the *task* doing so. The
+home-cluster task pod running `KubernetesPodOperator` or `SparkKubernetesOperator` is handed a
+second Kubernetes connection (`kubernetes_conn_id="k8s_remote"`) that points at the *other*
+cluster's API server, so one operator call creates a pod/`SparkApplication` over there instead of
+locally. That connection is a kubeconfig built around a long-lived token for a
+`<tenant>-workload-runner` ServiceAccount that GitOps already provisioned in the remote cluster's
+`<tenant>-workloads` namespace (`scripts/70-remote-access.sh`); it's stored in Vault and pulled in
+at task-run time by the same Vault secrets backend used for every other Airflow connection.
+tenant-a and tenant-b are deliberately mirrored (home `af-work-a`/remote `af-work-b` and vice
+versa) so both clusters get exercised as both "home" and "remote". Full detail:
+[`docs/architecture.md`](docs/architecture.md#remote-workload-execution).
+
 ## Status
 
 Bootstrapped and run end to end on a real local 3-cluster lab (not just CI).
