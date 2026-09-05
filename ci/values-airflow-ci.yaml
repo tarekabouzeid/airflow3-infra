@@ -111,7 +111,7 @@ airflow:
       value: >-
         {"connections_path":"connections","variables_path":"variables","config_path":null,
         "mount_point":"tenant-ci","auth_type":"kubernetes","kubernetes_role":"tenant-ci-airflow",
-        "kubernetes_mount_point":"kubernetes-ci","url":"http://vault.vault.svc:8200"}
+        "auth_mount_point":"kubernetes-ci","url":"http://vault.vault.svc:8200"}
 postgres-lite:
   resources:
     requests: {cpu: 50m, memory: 256Mi}
