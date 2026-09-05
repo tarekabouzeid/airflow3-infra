@@ -35,7 +35,8 @@ else
   [ -f "${keys_file}" ] || die "Vault is initialized but ${keys_file} is missing - cannot unseal. See docs/troubleshooting.md."
 fi
 
-sealed=$(vexec vault status -format=json | jq -r '.sealed')
+status_json=$(vexec vault status -format=json 2>/dev/null || true)
+sealed=$(echo "${status_json}" | jq -r '.sealed')
 if [ "${sealed}" == "true" ]; then
   log "unsealing Vault..."
   key=$(jq -r '.unseal_keys_b64[0]' "${keys_file}")

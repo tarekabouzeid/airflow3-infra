@@ -43,10 +43,17 @@ networkPolicy:
   allowKubeAPIEgress: true
   extraEgressNamespaceSelectors: []
 quota:
-  requests.cpu: "2"
-  requests.memory: 4Gi
-  limits.cpu: "4"
-  limits.memory: 8Gi
+  # A full Airflow 3 deployment's own steady-state containers (measured directly against a real
+  # local run, not guessed): api-server(1) + dag-processor(2, incl. log-groomer) + scheduler(2) +
+  # statsd(1) + postgres(1) + triggerer(2) = 9 containers, each defaulting to limitRange's
+  # defaultLimitCPU/Memory below since neither this chart nor the upstream apache-airflow chart
+  # sets explicit per-component resources. limits.cpu: "4" (the old value) couldn't even fit the
+  # steady state, let alone the migrate-database/create-user/dag-loader Jobs that run concurrently
+  # with it during startup - postgres was stuck permanently unable to schedule as a result.
+  requests.cpu: "4"
+  requests.memory: 6Gi
+  limits.cpu: "12"
+  limits.memory: 12Gi
   pods: "20"
 limitRange:
   defaultRequestCPU: 100m

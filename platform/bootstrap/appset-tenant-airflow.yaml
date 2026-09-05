@@ -65,6 +65,7 @@ spec:
                 branch: {{.tenantRepoBranch}}
                 dagsPath: dags
               serviceAccountName: {{.tenant}}-airflow
+              vaultServiceAccountName: {{.tenant}}-airflow-scheduler
               airflow:
                 data:
                   metadataSecretName: {{.tenant}}-airflow-metadata-conn
