@@ -7,6 +7,7 @@ export
 
 KIND_NETWORK ?= kind
 CLUSTERS := af-mgmt af-work-a af-work-b
+PORT ?= 8081
 
 .PHONY: help preflight clusters teardown-clusters local-registry \
         bootstrap install-argocd vault-init vault-configure remote-access \
@@ -79,11 +80,11 @@ ui-argocd:
 	kubectl --context kind-af-mgmt -n argocd port-forward svc/argocd-server 8080:443
 
 ui-airflow:
-	@if [ -z "$(TENANT)" ]; then echo "usage: make ui-airflow TENANT=tenant-a"; exit 1; fi
+	@if [ -z "$(TENANT)" ]; then echo "usage: make ui-airflow TENANT=tenant-a [PORT=8081]"; exit 1; fi
 	@home_cluster=$$(grep -A1 '^homeCluster:' platform/tenants/$(TENANT)/tenant.yaml | grep 'name:' | awk '{print $$2}'); \
 	if [ -z "$$home_cluster" ]; then echo "could not find homeCluster.name in platform/tenants/$(TENANT)/tenant.yaml"; exit 1; fi; \
-	echo "$(TENANT)'s home cluster is $$home_cluster"; \
-	kubectl --context kind-$$home_cluster -n $(TENANT)-airflow port-forward svc/$(TENANT)-airflow-api-server 8081:8080
+	echo "$(TENANT)'s home cluster is $$home_cluster, forwarding to localhost:$(PORT)"; \
+	kubectl --context kind-$$home_cluster -n $(TENANT)-airflow port-forward svc/$(TENANT)-airflow-api-server $(PORT):8080
 
 lint:
 	@echo "Linting charts..."
