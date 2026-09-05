@@ -92,10 +92,20 @@ make port-forward-stop    # stop them
 
 | UI | URL | Login |
 |---|---|---|
-| Argo CD | http://localhost:8080 | `admin` / `kubectl --context kind-af-mgmt -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
+| Argo CD | http://localhost:8080 | `admin` / see password command below |
 | Tenant A Airflow | http://localhost:8081 | `admin` / `admin` (chart default) |
 | Tenant B Airflow | http://localhost:8082 | `admin` / `admin` (chart default) |
-| Headlamp | http://localhost:8083 | token: `kubectl --context kind-af-mgmt -n headlamp create token <sa>` (`kubectl -n headlamp get sa` to find `<sa>`) - see all 3 clusters from the one UI |
+| Headlamp | http://localhost:8083 | token, see command below - see all 3 clusters from the one UI |
+
+```bash
+# Argo CD admin password
+kubectl --context kind-af-mgmt -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d
+
+# Headlamp login token
+kubectl --context kind-af-mgmt -n headlamp create token \
+  "$(kubectl --context kind-af-mgmt -n headlamp get sa -o jsonpath='{.items[0].metadata.name}')"
+```
 
 Forwarding just one tenant on a specific port also still works directly:
 `make ui-airflow TENANT=tenant-a PORT=8081`.
