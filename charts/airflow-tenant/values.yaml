@@ -62,6 +62,19 @@ vaultServiceAccountName: tenant-a-airflow-scheduler
 airflow:
   executor: KubernetesExecutor
 
+  # The chart's own values.yaml warns about this: "Disable this if you are using ArgoCD". Default
+  # (true) makes both Jobs Helm post-install/post-upgrade hooks, which Argo CD runs as PostSync
+  # hooks - meaning they only run after every other Sync-phase resource is Healthy. But every
+  # Airflow component Deployment/StatefulSet has its own wait-for-airflow-migrations init
+  # container that never succeeds until migrations have actually run - a real deadlock (confirmed
+  # locally: every component sat Init:Error forever, and the migrations Job was never even
+  # created). false makes both plain Sync-phase resources instead, so they run immediately
+  # alongside everything else and the init containers' retry loop succeeds once they complete.
+  migrateDatabaseJob:
+    useHelmHooks: false
+  createUserJob:
+    useHelmHooks: false
+
   images:
     airflow:
       repository: localhost:5001/airflow-tenant
