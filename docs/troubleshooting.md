@@ -57,6 +57,28 @@ on `Running` for no clear reason, check `kubectl -n argocd logs statefulset/argo
 controller` for `vault`/`root` churn crowding it out before assuming the tenant Application itself
 is broken.
 
+**A tenant Application's sync operation sits `Running` for many minutes with the same "waiting for
+healthy state of X" message, never progressing - `kubectl -n argocd logs statefulset/argocd-
+application-controller | grep <app-name>` shows it repeatedly logging `Syncing`/`sync/terminate
+complete` in a tight ~seconds-apart loop instead of settling.**
+Observed repeatedly on this Application's *very first* sync (a brand-new namespace with a large
+resource set: Airflow's several Deployments/StatefulSets plus ExternalSecrets/SecretStore plus
+PostSync hook Jobs, all in one multi-source Application) - not on later resyncs of the same
+Application once it's past its first successful sync. Root cause not fully isolated (it's an
+application-controller reconcile-loop behavior, not a manifest/config problem - confirmed the
+node has ample idle CPU/memory when this happens, and it still happens on a completely
+untouched, freshly-created Application, ruling out interference from concurrent manual
+`argocd.argoproj.io/refresh` calls). The reliable fix: delete the Application object itself (not
+`--cascade`, just `kubectl -n argocd delete application <name> --wait=false`, then if it hangs on
+its `resources-finalizer.argocd.argoproj.io` finalizer, `kubectl -n argocd patch application
+<name> -p '{"metadata":{"finalizers":[]}}' --type=merge` to force it through) and manually clean
+up any partially-created namespace on the destination cluster (`kubectl delete namespace
+<tenant>-airflow --wait=false`) - the owning ApplicationSet recreates the Application fresh
+within seconds, and the new instance's first sync reliably completes normally. Needed after
+*every* platform-repo change that affects one of these Applications while debugging this exact
+issue locally, since a plain `argocd.argoproj.io/refresh=hard` on the stuck Application does not
+by itself clear the stuck operation.
+
 **Argo CD Application flips to `Unknown` health mid Argo-CD-upgrade.**
 Expected - see `docs/runbook-argocd-upgrade.md`. The application-controller restarts itself
 during its own upgrade. Give it a few minutes before treating it as a real failure.
