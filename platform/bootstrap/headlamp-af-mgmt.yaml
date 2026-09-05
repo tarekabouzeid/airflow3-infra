@@ -30,6 +30,13 @@ spec:
         config:
           inCluster: true
           inClusterContextName: "af-mgmt"
+          # Confirmed live against a real 3-cluster lab: the `KUBECONFIG` env var is NOT read by
+          # headlamp-server (its own `-h` output only has `-kubeconfig string`, and setting just
+          # the env var left the pod logging "No kubeconfig set, using only the in-cluster
+          # context" despite it being present) - the colon-separated multi-path syntax has to be
+          # passed as this explicit CLI flag instead.
+          extraArgs:
+            - "-kubeconfig=/headlamp-kubeconfigs/af-work-a:/headlamp-kubeconfigs/af-work-b"
         # Same cluster-admin level the chart's own default already grants Headlamp's ServiceAccount
         # for af-mgmt (its in-cluster identity) - kept explicit here so all 3 clusters are
         # deliberately uniform in the UI, matching what scripts/45 grants on af-work-a/af-work-b.
@@ -47,9 +54,6 @@ spec:
           - name: remote-kubeconfigs
             mountPath: /headlamp-kubeconfigs
             readOnly: true
-        env:
-          - name: KUBECONFIG
-            value: "/headlamp-kubeconfigs/af-work-a:/headlamp-kubeconfigs/af-work-b"
   destination:
     server: https://kubernetes.default.svc
     namespace: headlamp

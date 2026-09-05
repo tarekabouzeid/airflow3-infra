@@ -143,8 +143,11 @@ af-work-b too, following the same pattern as `scripts/40-register-clusters.sh`'s
 dedicated ServiceAccount (`headlamp-manager`, bound to `cluster-admin`) on each workload cluster,
 build a standalone kubeconfig, and store both under one `headlamp-kubeconfigs` Secret in the
 `headlamp` namespace on af-mgmt (never committed - it embeds live bearer tokens) that the
-Application's Helm values mount and point `KUBECONFIG` at. Until that script runs, the pod may sit
-erroring on the two missing kubeconfig paths and self-heals once it does (the script also restarts
+Application's Helm values mount and point the headlamp-server `-kubeconfig` flag at
+(`config.extraArgs` - not the `KUBECONFIG` env var, which is not read by headlamp-server;
+confirmed live against a real 3-cluster lab, see `platform/bootstrap/headlamp-af-mgmt.yaml`).
+Until that script runs, the pod may sit erroring on the two missing kubeconfig paths and
+self-heals once it does (the script also restarts
 the Deployment itself, since a Secret change alone doesn't make Headlamp re-read the mounted
 files) - the same "up but not yet usable" shape Vault has before `make vault-init`.
 

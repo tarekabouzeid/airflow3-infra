@@ -3,9 +3,10 @@
 # af-work-a and af-work-b too: mints a long-lived token for a dedicated ServiceAccount on each
 # workload cluster (mirroring scripts/40-register-clusters.sh's own argocd-manager pattern), builds
 # a standalone kubeconfig per cluster, and stores both in one `headlamp-kubeconfigs` Secret in the
-# `headlamp` namespace on af-mgmt - which the Application's Helm values mount and point KUBECONFIG
-# at. af-mgmt itself needs no kubeconfig here: Headlamp's `config.inCluster: true` already gives it
-# that cluster via its own pod ServiceAccount/token.
+# `headlamp` namespace on af-mgmt - which the Application's Helm values mount and point the
+# headlamp-server `-kubeconfig` flag at (config.extraArgs; NOT the KUBECONFIG env var - confirmed
+# live that headlamp-server does not read it). af-mgmt itself needs no kubeconfig here: Headlamp's
+# `config.inCluster: true` already gives it that cluster via its own pod ServiceAccount/token.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source scripts/lib/common.sh
