@@ -39,5 +39,17 @@ applicationSet:
 redis:
   enabled: true
 
+# Confirmed live: this PreSync hook Job's ttlSecondsAfterFinished races against Argo CD's own
+# hook-completion tracking (a known open upstream bug, argoproj/argo-helm#2887) - the Job
+# self-deletes (cascading its supporting Role/RoleBinding via ownerReferences) before Argo CD
+# reliably observes it reach Succeeded, wedging the argocd Application's own sync in "Running"
+# forever ("waiting for completion of hook.../argocd-redis-secret-init"), reproduced here even
+# retrying/resyncing the SAME already-deployed revision and restarting the application-controller.
+# The secret it exists to create (argocd-redis) is already present and stable - disabling this
+# hook (the chart's own documented escape hatch) stops the wedge from recurring on every future
+# sync without needing to hand-provision anything.
+redisSecretInit:
+  enabled: false
+
 dex:
   enabled: false   # no SSO for a local lab; CLI/UI auth is via the built-in admin secret
