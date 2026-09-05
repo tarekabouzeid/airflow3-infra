@@ -18,8 +18,14 @@ spec:
     - server: {{ .server | quote }}
       namespace: {{ .namespace | quote }}
     {{- end }}
-  # Tenants get no cluster-scoped resources at all: no CRDs, no ClusterRoles, nothing.
-  clusterResourceWhitelist: []
+  # Tenants get no cluster-scoped resources except their own Namespace object: the platform's
+  # tenant-airflow Application (scoped to this project) creates it as part of the same sync unit
+  # as the namespace's guardrails and workload (see appset-tenant-airflow.yaml) - no CRDs, no
+  # ClusterRoles, nothing else. Tenants have no path to influence the Namespace name/count (it's
+  # hardcoded per-tenant in appset-tenant-airflow.yaml, not derived from tenant-controlled input).
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
   namespaceResourceBlacklist:
     {{- toYaml .Values.namespaceResourceBlacklist | nindent 4 }}
   orphanedResources:

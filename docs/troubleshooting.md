@@ -58,6 +58,38 @@ the field name and add an `ignoreDifferences` entry speculatively; confirm it fi
 Expected - see `docs/runbook-argocd-upgrade.md`. The application-controller restarts itself
 during its own upgrade. Give it a few minutes before treating it as a real failure.
 
+**The `root` Application sits `Unknown` sync status right after `make bootstrap`, with condition
+`Failed to load target state: ... authentication required. Repository not found.`**
+Confirmed root cause: `platform/bootstrap/*.yaml` and `bootstrap/root-app.yaml` point at this
+platform repo itself over HTTPS (`https://github.com/tarekabouzeid/airflow3-infra`), which is
+private - Argo CD has no credential for it out of the box. This is separate from the per-tenant
+`GITHUB_TOKEN` seeded into Vault by `make seed-tenant-secrets` (that one is for the in-cluster
+dag-loader Job, not Argo CD's own git client). Fixed in `scripts/30-install-argocd.sh`: it now
+requires `GITHUB_TOKEN` and registers a `platform-repo-creds` Secret
+(`argocd.argoproj.io/secret-type: repository`) in the `argocd` namespace before applying the root
+Application - run `GITHUB_TOKEN=ghp_xxx make bootstrap` (or `make install-argocd`), not bare
+`make bootstrap`. This was never caught before because CI's `e2e-kind.yaml` deliberately never
+exercises the platform's own Argo CD Application layer (see the comment at the top of that
+workflow) - only a real local `make bootstrap` run reaches this code path.
+
+**A `<tenant>-airflow` Application shows `ComparisonError`:
+`failed to get git client for repo https://github.com/tarekabouzeid/airflow3-infra-tenant-<x>`.**
+Same class of issue as the platform-repo credential above, one level down: this Application's
+source 3 of 3 pulls `deploy/airflow/values.yaml` straight from the tenant's own (private) repo,
+and Argo CD needs its own read credential for that repo too - separate from the per-tenant
+`GITHUB_TOKEN` seeded into Vault (that one's for the in-cluster dag-loader Job). Fixed in
+`scripts/30-install-argocd.sh`, which now registers a `<tenant>-repo-creds` Secret for each tenant
+alongside the platform one; re-run `GITHUB_TOKEN=ghp_xxx make install-argocd`.
+
+**The `root` Application (or anything under it) fails with a revision/branch-not-found error even
+after Argo CD has a working repo credential.**
+Every platform bootstrap manifest hardcodes `targetRevision: main` for this repo. If you're
+working on a branch that was never merged/pushed to `main`, that branch is what Argo CD needs to
+see - `main` not existing (or being stale) will surface as this error. Confirm with
+`git ls-remote origin main`; if missing, push your working branch there
+(`git push origin <branch>:main`) after confirming with whoever owns the repo, since it's a
+shared, visible change.
+
 **GitHub Actions `e2e-kind.yaml` fails on a `kubectl rollout status deployment/tenant-ci-airflow-*`
 step with "not found".**
 The official `apache-airflow/airflow` chart's exact resource-naming convention was not verified

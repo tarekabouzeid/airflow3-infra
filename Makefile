@@ -1,4 +1,4 @@
-SHELL := /usr/bin/env bash
+SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 .ONESHELL:
 
@@ -16,7 +16,9 @@ CLUSTERS := af-mgmt af-work-a af-work-b
 help:
 	@echo "Common targets:"
 	@echo "  make preflight          - check local tooling + docker + RAM"
-	@echo "  make bootstrap          - clusters + registry + argocd(old) + root app"
+	@echo "  GITHUB_TOKEN=ghp_xxx make bootstrap - clusters + registry + argocd + root app"
+	@echo "                            (GITHUB_TOKEN needs read access to this platform repo,"
+	@echo "                             registered as Argo CD's own repo credential)"
 	@echo "  make vault-init         - initialize & unseal Vault (writes .local/vault-keys.json)"
 	@echo "  make vault-configure    - configure Vault auth mounts, tenant KV, policies, roles"
 	@echo "  make remote-access      - wire remote-cluster kubeconfigs into Vault per tenant"

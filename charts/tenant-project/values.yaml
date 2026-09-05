@@ -17,15 +17,16 @@ destinations:
     namespace: tenant-a-workloads
   - server: https://af-work-b-control-plane:6443
     namespace: tenant-a-workloads
-# Resource kinds tenants are explicitly forbidden from touching in their own namespaces,
-# even though the namespace itself is theirs. Platform-owned guardrails.
+# Resource kinds tenants are explicitly forbidden from touching in their own namespaces, even
+# though the namespace itself is theirs. Deliberately does NOT include ResourceQuota/LimitRange/
+# NetworkPolicy: this same tenant AppProject is what the platform's own tenant-airflow Application
+# (project: {{.tenant}}) uses to create exactly those three kinds as the tenant's guardrails, in
+# the SAME sync unit as the tenant's workload (see appset-tenant-airflow.yaml) - Argo CD's project
+# RBAC applies per-Application, not per-source, so blacklisting them here would also block the
+# platform's own legitimate creation of them, not just a hypothetical tenant-authored one. Tenants
+# have no path to author these kinds anyway (they only ever contribute Helm values, never raw
+# manifests, to charts they don't control the templates of).
 namespaceResourceBlacklist:
-  - group: ""
-    kind: ResourceQuota
-  - group: ""
-    kind: LimitRange
-  - group: networking.k8s.io
-    kind: NetworkPolicy
   - group: rbac.authorization.k8s.io
     kind: ClusterRole
   - group: rbac.authorization.k8s.io

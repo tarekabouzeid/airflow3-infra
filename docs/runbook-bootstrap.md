@@ -3,12 +3,15 @@
 Prerequisites: Docker with >= 12GiB RAM allocated, and `docker`, `kind`, `helm`, `kubectl`, `jq`,
 `vault` (the CLI is only used indirectly by scripts via `kubectl exec`, but is listed by
 `00-preflight.sh` for completeness) on your PATH. A GitHub personal access token with read access
-to `airflow3-infra-tenant-a` and `airflow3-infra-tenant-b`.
+to this platform repo (`airflow3-infra` - Argo CD needs it to sync `platform/bootstrap/`, since
+the repo is private) as well as `airflow3-infra-tenant-a` and `airflow3-infra-tenant-b`.
 
 ```bash
 make preflight
-make bootstrap          # creates 3 kind clusters, local registry, builds+pushes the airflow
-                         # image, installs Argo CD, registers af-work-a/b, applies the root app
+GITHUB_TOKEN=ghp_xxx make bootstrap   # creates 3 kind clusters, local registry, builds+pushes the
+                                       # airflow image, installs Argo CD (registering its read
+                                       # credential for this repo), registers af-work-a/b, applies
+                                       # the root app
 ```
 
 After `make bootstrap`, watch Argo CD sync everything else:

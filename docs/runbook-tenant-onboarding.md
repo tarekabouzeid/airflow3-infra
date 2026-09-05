@@ -44,7 +44,18 @@ argocd.argoproj.io/refresh=hard --overwrite`).
 `spark.jobNamespaces` explicitly (a small, deliberate coupling - see `docs/architecture.md`).
 Add `<tenant>-workloads` to both files, commit, push.
 
-## 4. Configure Vault for the new tenant
+## 4. Register the new tenant repo with Argo CD
+
+Argo CD needs its own read credential for the tenant's repo (separate from the `GITHUB_TOKEN`
+seeded into Vault in the next step, which is for the in-cluster dag-loader Job, not Argo CD's git
+client) - `appset-tenant-airflow.yaml`'s source 3 of 3 pulls `deploy/airflow/values.yaml` straight
+from it. Add a `register_repo_creds` call for the new tenant in `scripts/30-install-argocd.sh`,
+then re-run:
+```bash
+GITHUB_TOKEN=ghp_xxx make install-argocd
+```
+
+## 5. Configure Vault for the new tenant
 
 Extend `scripts/60-vault-configure.sh`'s two `configure_tenant` calls with a third, matching the
 new tenant's home/remote clusters, then re-run:
@@ -54,7 +65,7 @@ GITHUB_TOKEN=ghp_xxx make seed-tenant-secrets   # extend the tenant loop there t
 make remote-access                               # extend wire_remote_access there too
 ```
 
-## 5. Verify
+## 6. Verify
 
 ```bash
 make status              # <tenant>-project, <tenant>-airflow, <tenant>-workloads-* all Healthy
@@ -63,5 +74,6 @@ make test-integration    # extend TENANTS/HOME_CLUSTER in scripts/90-run-integra
 
 Total new/changed files for a tenant with one remote cluster: 2 files in the platform repo
 (`tenant.yaml` + one `workloads-*.yaml` per additional cluster beyond the home one), one small
-edit to each Spark Operator Application, and one small edit to `scripts/60-vault-configure.sh` -
-plus the new tenant's own repo. Nothing in `charts/` changes.
+edit to each Spark Operator Application, one small edit to `scripts/30-install-argocd.sh`, and one
+small edit to `scripts/60-vault-configure.sh` - plus the new tenant's own repo. Nothing in
+`charts/` changes.

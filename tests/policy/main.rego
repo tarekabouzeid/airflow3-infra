@@ -16,11 +16,23 @@ deny contains msg if {
 	msg := sprintf("Application %q is a tenant workloads app but uses the 'default' AppProject", [input.metadata.name])
 }
 
-# Tenant AppProjects must not whitelist any cluster-scoped resources.
+# Tenant AppProjects must not whitelist any cluster-scoped resources, except a bare Namespace:
+# the platform's own tenant-airflow Application (scoped to this project) creates the tenant's
+# Namespace as part of one sync unit with its guardrails and workload (see
+# appset-tenant-airflow.yaml and charts/tenant-project/templates/appproject.yaml).
+is_namespace_exception(w) if {
+	w.group == ""
+	w.kind == "Namespace"
+}
+
 deny contains msg if {
 	input.kind == "AppProject"
-	count(input.spec.clusterResourceWhitelist) > 0
-	msg := sprintf("AppProject %q whitelists cluster-scoped resources: %v", [input.metadata.name, input.spec.clusterResourceWhitelist])
+	extra := [w |
+		w := input.spec.clusterResourceWhitelist[_]
+		not is_namespace_exception(w)
+	]
+	count(extra) > 0
+	msg := sprintf("AppProject %q whitelists cluster-scoped resources beyond the allowed Namespace exception: %v", [input.metadata.name, extra])
 }
 
 # No ":latest" image tags anywhere.
