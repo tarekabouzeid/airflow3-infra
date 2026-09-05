@@ -51,7 +51,7 @@ spec:
             values: |
               tenant: {{.tenant}}
               vault:
-                address: http://af-mgmt-control-plane:8200
+                address: http://af-mgmt-control-plane:30820
                 mountPoint: {{.vault.mountPoint}}
                 authMountPath: {{.cluster.vaultAuthMountPath}}
                 esoRole: {{.vault.esoRole}}

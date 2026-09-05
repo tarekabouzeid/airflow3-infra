@@ -10,7 +10,7 @@ global:
   tenant: tenant-a   # propagated to the postgres-lite subchart
 
 vault:
-  address: http://af-mgmt-control-plane:8200
+  address: http://af-mgmt-control-plane:30820
   # KV-v2 mount holding this tenant's connections/variables (see scripts/60-vault-configure.sh)
   mountPoint: tenant-a
   # Vault Kubernetes auth mount specific to `clusterName` above - one mount per cluster.
@@ -123,4 +123,4 @@ airflow:
       value: >-
         {"connections_path":"connections","variables_path":"variables","config_path":null,
         "mount_point":"tenant-a","auth_type":"kubernetes","kubernetes_role":"tenant-a-airflow",
-        "kubernetes_mount_point":"kubernetes-work-a","url":"http://af-mgmt-control-plane:8200"}
+        "kubernetes_mount_point":"kubernetes-work-a","url":"http://af-mgmt-control-plane:30820"}

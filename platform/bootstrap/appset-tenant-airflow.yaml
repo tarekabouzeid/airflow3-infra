@@ -55,7 +55,7 @@ spec:
               global:
                 tenant: {{.tenant}}
               vault:
-                address: http://af-mgmt-control-plane:8200
+                address: http://af-mgmt-control-plane:30820
                 mountPoint: {{.vault.mountPoint}}
                 authMountPath: {{.homeCluster.vaultAuthMountPath}}
                 airflowRole: {{.vault.airflowRole}}
@@ -85,7 +85,7 @@ spec:
                       "mount_point":"{{.vault.mountPoint}}","auth_type":"kubernetes",
                       "kubernetes_role":"{{.vault.airflowRole}}",
                       "kubernetes_mount_point":"{{.homeCluster.vaultAuthMountPath}}",
-                      "url":"http://af-mgmt-control-plane:8200"}
+                      "url":"http://af-mgmt-control-plane:30820"}
         - repoURL: "{{.tenantRepoURL}}"
           targetRevision: "{{.tenantRepoBranch}}"
           ref: values
