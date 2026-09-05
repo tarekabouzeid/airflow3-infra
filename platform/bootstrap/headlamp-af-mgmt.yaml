@@ -1,0 +1,68 @@
+# Headlamp: general-purpose Kubernetes web UI, for humans (not part of any tenant's execution
+# path). Runs only on af-mgmt; af-work-a/af-work-b are reachable from it too, via kubeconfigs that
+# scripts/45-seed-headlamp-kubeconfigs.sh mints and stores as the `headlamp-kubeconfigs` Secret in
+# this namespace (never committed - it embeds live bearer tokens). Until that script has run,
+# the pod may sit CrashLoopBackOff/erroring on the two missing kubeconfig paths - same "up but not
+# actually usable yet" shape as Vault before `make vault-init` (see vault-af-mgmt.yaml) - and
+# self-heals once the script runs (it also restarts this Deployment itself, since a Secret change
+# alone doesn't trigger a re-read of the mounted files).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: headlamp
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes-sigs.github.io/headlamp
+    chart: headlamp
+    targetRevision: "0.45.0"   # verified by CI against the real chart index; see versions.env
+    helm:
+      values: |
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        config:
+          inCluster: true
+          inClusterContextName: "af-mgmt"
+        # Same cluster-admin level the chart's own default already grants Headlamp's ServiceAccount
+        # for af-mgmt (its in-cluster identity) - kept explicit here so all 3 clusters are
+        # deliberately uniform in the UI, matching what scripts/45 grants on af-work-a/af-work-b.
+        clusterRoleBinding:
+          create: true
+          clusterRoleName: cluster-admin
+        # af-work-a/af-work-b: one kubeconfig file per key in the headlamp-kubeconfigs Secret,
+        # `optional: true` so the pod still starts before that Secret exists (see note above).
+        volumes:
+          - name: remote-kubeconfigs
+            secret:
+              secretName: headlamp-kubeconfigs
+              optional: true
+        volumeMounts:
+          - name: remote-kubeconfigs
+            mountPath: /headlamp-kubeconfigs
+            readOnly: true
+        env:
+          - name: KUBECONFIG
+            value: "/headlamp-kubeconfigs/af-work-a:/headlamp-kubeconfigs/af-work-b"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: headlamp
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

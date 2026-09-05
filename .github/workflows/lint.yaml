@@ -40,6 +40,7 @@ jobs:
           helm repo add external-secrets "${ESO_CHART_REPO}"
           helm repo add hashicorp "${VAULT_CHART_REPO}"
           helm repo add spark-operator "${SPARK_OPERATOR_CHART_REPO}"
+          helm repo add headlamp "${HEADLAMP_CHART_REPO}"
           helm repo update
 
           check() {
@@ -57,12 +58,14 @@ jobs:
           check "argo/argo-cd" "${ARGOCD_CHART_VERSION_START}"
           check "argo/argo-cd" "${ARGOCD_CHART_VERSION_STEP2}"
           check "apache-airflow/airflow" "${AIRFLOW_CHART_VERSION}"
+          check "headlamp/headlamp" "${HEADLAMP_CHART_VERSION}"
 
           echo "Latest available versions (informational - not enforced):"
           helm search repo argo/argo-cd --versions | head -5 || true
           helm search repo external-secrets/external-secrets --versions | head -3 || true
           helm search repo hashicorp/vault --versions | head -3 || true
           helm search repo spark-operator/spark-operator --versions | head -3 || true
+          helm search repo headlamp/headlamp --versions | head -3 || true
 
   helm-lint-and-render:
     runs-on: ubuntu-latest

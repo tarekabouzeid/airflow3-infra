@@ -10,20 +10,24 @@ the repo is private) as well as `airflow3-infra-tenant-a` and `airflow3-infra-te
 make preflight
 GITHUB_TOKEN=ghp_xxx make bootstrap   # creates 3 kind clusters, local registry, builds+pushes the
                                        # airflow image, installs Argo CD (registering its read
-                                       # credential for this repo), registers af-work-a/b, applies
-                                       # the root app
+                                       # credential for this repo), registers af-work-a/b, wires
+                                       # af-work-a/b into Headlamp, applies the root app
 ```
 
 `make bootstrap` already ran `scripts/95-port-forward.sh` for you - Argo CD is live at
-http://localhost:8080 (tenant Airflow UIs will start responding once they exist, later in this
-runbook; re-run `make port-forward` any time to pick them up or restart a dropped forward). Watch
-Argo CD sync everything else:
+http://localhost:8080 and Headlamp at http://localhost:8083 (tenant Airflow UIs will start
+responding once they exist, later in this runbook; re-run `make port-forward` any time to pick
+them up or restart a dropped forward). Watch Argo CD sync everything else:
 
 ```bash
 kubectl --context kind-af-mgmt -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 -d   # admin's password, for the UI login
-make status       # or watch the UI: argocd, vault, external-secrets-*, spark-operator-* should
-                   # all reach Synced/Healthy within a few minutes
+kubectl --context kind-af-mgmt -n headlamp create token \
+  "$(kubectl --context kind-af-mgmt -n headlamp get sa -o jsonpath='{.items[0].metadata.name}')"
+  # a token to log into Headlamp; af-work-a/af-work-b appear there once
+  # scripts/45-seed-headlamp-kubeconfigs.sh has run (part of `make bootstrap`, above)
+make status       # or watch the UI: argocd, vault, headlamp, external-secrets-*,
+                   # spark-operator-* should all reach Synced/Healthy within a few minutes
 ```
 
 Vault comes up sealed and unconfigured - Argo CD deploying the Vault chart is not the same as

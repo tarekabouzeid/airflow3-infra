@@ -9,7 +9,8 @@ is called out below.
 Three single-node KIND clusters, all on the shared `kind` Docker network so container-name
 addressing works (`https://af-work-b-control-plane:6443` resolves from any of the three):
 
-- **af-mgmt** - Argo CD (self-managed) + Vault (OSS, standalone, file storage).
+- **af-mgmt** - Argo CD (self-managed) + Vault (OSS, standalone, file storage) + Headlamp
+  (Kubernetes web UI, with read/write access to af-work-a/af-work-b too - see "Headlamp" below).
 - **af-work-a** - tenant-a's Airflow (home), tenant-a-workloads (local), tenant-b-workloads (remote).
 - **af-work-b** - tenant-b's Airflow (home), tenant-b-workloads (local), tenant-a-workloads (remote).
 
@@ -36,8 +37,8 @@ currently worked around with remote logging (e.g. S3/GCS), which would be the pr
   points at the `argo/argo-cd` chart with `bootstrap/argocd-values.yaml` from git. Upgrading Argo
   CD = bump `targetRevision`, commit, sync (see `docs/runbook-argocd-upgrade.md`).
 - **App-of-apps** (`bootstrap/root-app.yaml` -> `platform/bootstrap/`): a small, static,
-  platform-owned directory - the self-management Application, the 3 platform-component
-  Applications (Vault, and one External-Secrets + one Spark-Operator per workload cluster), and 3
+  platform-owned directory - the self-management Application, the platform-component Applications
+  (Vault, Headlamp, and one External-Secrets + one Spark-Operator per workload cluster), and 3
   ApplicationSets for the tenant layer.
 - **ApplicationSets for tenants** (the thing that actually multiplies):
   - `appset-tenant-projects.yaml` - one Application per tenant, rendering
@@ -131,6 +132,22 @@ inline fields.
   namespace) binds to the `system:serviceaccounts:<namespace>` group instead of a named
   ServiceAccount, for the same reason.
 
+## Headlamp
+
+`platform/bootstrap/headlamp-af-mgmt.yaml` deploys Headlamp on af-mgmt only - it isn't part of any
+tenant's execution path, just a Kubernetes web UI for humans. `config.inCluster: true` gives it
+af-mgmt via its own pod ServiceAccount (chart default: bound to `cluster-admin`, same as every
+other cluster it can see). `scripts/45-seed-headlamp-kubeconfigs.sh` gives it af-work-a and
+af-work-b too, following the same pattern as `scripts/40-register-clusters.sh`'s
+`argocd-manager`/`scripts/70-remote-access.sh`'s per-tenant kubeconfigs: mint a token for a
+dedicated ServiceAccount (`headlamp-manager`, bound to `cluster-admin`) on each workload cluster,
+build a standalone kubeconfig, and store both under one `headlamp-kubeconfigs` Secret in the
+`headlamp` namespace on af-mgmt (never committed - it embeds live bearer tokens) that the
+Application's Helm values mount and point `KUBECONFIG` at. Until that script runs, the pod may sit
+erroring on the two missing kubeconfig paths and self-heals once it does (the script also restarts
+the Deployment itself, since a Secret change alone doesn't make Headlamp re-read the mounted
+files) - the same "up but not yet usable" shape Vault has before `make vault-init`.
+
 ## Remote workload execution
 
 `scripts/70-remote-access.sh` mints a long-lived token for the `<tenant>-workload-runner`
@@ -154,7 +171,11 @@ Docker host anyway (a laptop). In CI, "remote" execution is simulated by pointin
 `k8s_remote` back at the *same* cluster via an explicit kubeconfig rather than the in-cluster
 identity - which still exercises the real "external Kubernetes connection" code path in both
 operators, just not real cross-cluster networking. The full 3-cluster rehearsal is the local flow
-in `docs/runbook-bootstrap.md`.
+in `docs/runbook-bootstrap.md`. For the same one-cluster-runner reason, `e2e-kind.yaml` does not
+deploy Headlamp at all: its whole point (af-work-a/af-work-b reachability via
+`scripts/45-seed-headlamp-kubeconfigs.sh`) needs clusters that don't exist there. `lint.yaml`
+(chart-version verification) and `policy.yaml` (static Application manifest) still cover it; the
+3-cluster reachability itself is only proven by the local bootstrap flow.
 
 The tenant layer in `e2e-kind.yaml` is applied with `helm template | kubectl apply`, not wrapped
 in real Argo CD Applications/ApplicationSets, specifically to avoid needing a GitHub token for a

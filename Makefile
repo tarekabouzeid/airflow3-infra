@@ -11,8 +11,8 @@ PORT ?= 8081
 
 .PHONY: help preflight clusters teardown-clusters local-registry \
         bootstrap install-argocd vault-init vault-configure remote-access \
-        seed-tenant-secrets status test-integration upgrade-argocd \
-        ui-argocd ui-airflow port-forward port-forward-stop lint teardown images
+        seed-tenant-secrets seed-headlamp-kubeconfigs status test-integration upgrade-argocd \
+        ui-argocd ui-airflow ui-headlamp port-forward port-forward-stop lint teardown images
 
 help:
 	@echo "Common targets:"
@@ -23,9 +23,10 @@ help:
 	@echo "  make vault-init         - initialize & unseal Vault (writes .local/vault-keys.json)"
 	@echo "  make vault-configure    - configure Vault auth mounts, tenant KV, policies, roles"
 	@echo "  make remote-access      - wire remote-cluster kubeconfigs into Vault per tenant"
+	@echo "  make seed-headlamp-kubeconfigs - wire af-work-a/b kubeconfigs into Headlamp on af-mgmt"
 	@echo "  make status             - show Application sync/health across all tenants"
 	@echo "  make test-integration   - run the 2 integration DAGs for every tenant"
-	@echo "  make port-forward       - forward Argo CD + both tenants' Airflow UIs to localhost"
+	@echo "  make port-forward       - forward Argo CD + Headlamp + both tenants' Airflow UIs to localhost"
 	@echo "                            (also runs automatically at the end of bootstrap)"
 	@echo "  make port-forward-stop  - stop them"
 	@echo "  make upgrade-argocd VERSION=<chart-version> - bump Argo CD via GitOps"
@@ -51,6 +52,7 @@ install-argocd:
 
 bootstrap: preflight clusters local-registry images install-argocd
 	bash scripts/40-register-clusters.sh
+	bash scripts/45-seed-headlamp-kubeconfigs.sh
 	bash scripts/95-port-forward.sh
 	@echo "Bootstrap complete. Run 'make vault-init' next."
 
@@ -62,6 +64,9 @@ vault-configure:
 
 remote-access:
 	bash scripts/70-remote-access.sh
+
+seed-headlamp-kubeconfigs:
+	bash scripts/45-seed-headlamp-kubeconfigs.sh
 
 seed-tenant-secrets:
 	bash scripts/80-seed-tenant-secrets.sh
@@ -82,6 +87,9 @@ upgrade-argocd:
 
 ui-argocd:
 	kubectl --context kind-af-mgmt -n argocd port-forward svc/argocd-server 8080:443
+
+ui-headlamp:
+	kubectl --context kind-af-mgmt -n headlamp port-forward svc/headlamp 8083:80
 
 ui-airflow:
 	@if [ -z "$(TENANT)" ]; then echo "usage: make ui-airflow TENANT=tenant-a [PORT=8081]"; exit 1; fi

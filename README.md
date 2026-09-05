@@ -67,6 +67,7 @@ deviates from the original plan, and
 |---|---|
 | Argo CD | 7.8.28 chart / v2.14.11 |
 | HashiCorp Vault | 0.30.0 chart / 1.19.0 |
+| Headlamp | 0.45.0 chart / 0.45.0 |
 | External Secrets Operator | 0.10.4 |
 | Kubeflow Spark Operator | 2.5.2 |
 | Apache Airflow | 1.22.0 chart / 3.1.7 |
@@ -79,13 +80,13 @@ deviates from the original plan, and
 
 ## Local access
 
-`make bootstrap` ends by running `bash scripts/95-port-forward.sh`, which forwards all three UIs
+`make bootstrap` ends by running `bash scripts/95-port-forward.sh`, which forwards all four UIs
 in the background and keeps running after the command that started it exits. Run it again
 standalone any time (already bootstrapped, forwards died, whatever) - it's idempotent, stopping
 anything it previously started before relaunching:
 
 ```bash
-make port-forward         # (re)start all three
+make port-forward         # (re)start all four
 make port-forward-stop    # stop them
 ```
 
@@ -94,6 +95,7 @@ make port-forward-stop    # stop them
 | Argo CD | http://localhost:8080 | `admin` / `kubectl --context kind-af-mgmt -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
 | Tenant A Airflow | http://localhost:8081 | `admin` / `admin` (chart default) |
 | Tenant B Airflow | http://localhost:8082 | `admin` / `admin` (chart default) |
+| Headlamp | http://localhost:8083 | token: `kubectl --context kind-af-mgmt -n headlamp create token <sa>` (`kubectl -n headlamp get sa` to find `<sa>`) - see all 3 clusters from the one UI |
 
 Forwarding just one tenant on a specific port also still works directly:
 `make ui-airflow TENANT=tenant-a PORT=8081`.
