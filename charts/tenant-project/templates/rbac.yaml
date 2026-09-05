@@ -25,7 +25,14 @@ rules:
     resources: ["events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["configmaps", "secrets"]
+    # configmaps needs write access (not just read): the Spark driver creates one per
+    # application to propagate executor pod config - confirmed locally, the driver failed with
+    # "configmaps is forbidden" (a 403, not a 404/missing-secret style error) trying to POST one.
+    # secrets stays read-only; Spark only mounts them, never creates one.
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["sparkoperator.k8s.io"]
     resources: ["sparkapplications", "sparkapplications/status", "scheduledsparkapplications"]
