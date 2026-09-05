@@ -25,7 +25,7 @@ tenantRepo:
 
 image:
   repository: localhost:5001/airflow-tenant
-  tag: 3.1.7-hashicorp-1   # built by images/airflow/Dockerfile, pushed by `make images`
+  tag: 3.1.7-hashicorp-2   # built by images/airflow/Dockerfile, pushed by `make images`
   pullPolicy: IfNotPresent
 
 dags:
@@ -78,7 +78,7 @@ airflow:
   images:
     airflow:
       repository: localhost:5001/airflow-tenant
-      tag: 3.1.7-hashicorp-1
+      tag: 3.1.7-hashicorp-2
       pullPolicy: IfNotPresent
 
   # We own the metadata DB via postgres-lite; disable the chart's bundled one. The connection
@@ -137,3 +137,13 @@ airflow:
         {"connections_path":"connections","variables_path":"variables","config_path":null,
         "mount_point":"tenant-a","auth_type":"kubernetes","kubernetes_role":"tenant-a-airflow",
         "auth_mount_point":"kubernetes-work-a","url":"http://af-mgmt-control-plane:30820"}
+    # KubernetesExecutor worker pods are ephemeral (deleted on completion) - without this, task
+    # logs are gone the moment the pod is (see docs/architecture.md). s3_logs is a Vault-backed
+    # connection (scripts/65-seed-object-store.sh) pointing at SeaweedFS
+    # (platform/bootstrap/seaweedfs-af-mgmt.yaml); bucket name matches its s3.createBuckets list.
+    - name: AIRFLOW__LOGGING__REMOTE_LOGGING
+      value: "True"
+    - name: AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID
+      value: "s3_logs"
+    - name: AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER
+      value: "s3://tenant-a-logs/airflow-logs"

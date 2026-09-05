@@ -11,8 +11,9 @@ PORT ?= 8081
 
 .PHONY: help preflight clusters teardown-clusters local-registry \
         bootstrap install-argocd vault-init vault-configure remote-access \
-        seed-tenant-secrets seed-headlamp-kubeconfigs status test-integration upgrade-argocd \
-        ui-argocd ui-airflow ui-headlamp port-forward port-forward-stop lint teardown images
+        seed-tenant-secrets seed-headlamp-kubeconfigs seed-object-store status test-integration \
+        upgrade-argocd ui-argocd ui-airflow ui-headlamp ui-vault ui-seaweedfs port-forward \
+        port-forward-stop lint teardown images
 
 help:
 	@echo "Common targets:"
@@ -24,9 +25,10 @@ help:
 	@echo "  make vault-configure    - configure Vault auth mounts, tenant KV, policies, roles"
 	@echo "  make remote-access      - wire remote-cluster kubeconfigs into Vault per tenant"
 	@echo "  make seed-headlamp-kubeconfigs - wire af-work-a/b kubeconfigs into Headlamp on af-mgmt"
+	@echo "  make seed-object-store  - wire SeaweedFS S3 creds into Vault (Airflow remote task logs)"
 	@echo "  make status             - show Application sync/health across all tenants"
 	@echo "  make test-integration   - run the 2 integration DAGs for every tenant"
-	@echo "  make port-forward       - forward Argo CD + Headlamp + both tenants' Airflow UIs to localhost"
+	@echo "  make port-forward       - forward Argo CD + Headlamp + Vault + SeaweedFS + both tenants' Airflow UIs to localhost"
 	@echo "                            (also runs automatically at the end of bootstrap)"
 	@echo "  make port-forward-stop  - stop them"
 	@echo "  make upgrade-argocd VERSION=<chart-version> - bump Argo CD via GitOps"
@@ -43,9 +45,9 @@ local-registry:
 	bash scripts/20-local-registry.sh
 
 images:
-	docker build -t localhost:$(LOCAL_REGISTRY_PORT)/airflow-tenant:3.1.7-hashicorp-1 \
+	docker build -t localhost:$(LOCAL_REGISTRY_PORT)/airflow-tenant:3.1.7-hashicorp-2 \
 		--build-arg AIRFLOW_VERSION=$(AIRFLOW_APP_VERSION) images/airflow
-	docker push localhost:$(LOCAL_REGISTRY_PORT)/airflow-tenant:3.1.7-hashicorp-1
+	docker push localhost:$(LOCAL_REGISTRY_PORT)/airflow-tenant:3.1.7-hashicorp-2
 
 install-argocd:
 	bash scripts/30-install-argocd.sh
@@ -67,6 +69,9 @@ remote-access:
 
 seed-headlamp-kubeconfigs:
 	bash scripts/45-seed-headlamp-kubeconfigs.sh
+
+seed-object-store:
+	bash scripts/65-seed-object-store.sh
 
 seed-tenant-secrets:
 	bash scripts/80-seed-tenant-secrets.sh
@@ -90,6 +95,12 @@ ui-argocd:
 
 ui-headlamp:
 	kubectl --context kind-af-mgmt -n headlamp port-forward svc/headlamp 8083:80
+
+ui-vault:
+	kubectl --context kind-af-mgmt -n vault port-forward svc/vault-ui 8200:8200
+
+ui-seaweedfs:
+	kubectl --context kind-af-mgmt -n seaweedfs port-forward svc/seaweedfs-filer 8888:8888
 
 ui-airflow:
 	@if [ -z "$(TENANT)" ]; then echo "usage: make ui-airflow TENANT=tenant-a [PORT=8081]"; exit 1; fi

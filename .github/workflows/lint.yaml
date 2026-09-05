@@ -41,6 +41,7 @@ jobs:
           helm repo add hashicorp "${VAULT_CHART_REPO}"
           helm repo add spark-operator "${SPARK_OPERATOR_CHART_REPO}"
           helm repo add headlamp "${HEADLAMP_CHART_REPO}"
+          helm repo add seaweedfs "${SEAWEEDFS_CHART_REPO}"
           helm repo update
 
           check() {
@@ -59,12 +60,14 @@ jobs:
           check "argo/argo-cd" "${ARGOCD_CHART_VERSION_STEP2}"
           check "apache-airflow/airflow" "${AIRFLOW_CHART_VERSION}"
           check "headlamp/headlamp" "${HEADLAMP_CHART_VERSION}"
+          check "seaweedfs/seaweedfs" "${SEAWEEDFS_CHART_VERSION}"
 
           echo "Latest available versions (informational - not enforced):"
           helm search repo argo/argo-cd --versions | head -5 || true
           helm search repo external-secrets/external-secrets --versions | head -3 || true
           helm search repo hashicorp/vault --versions | head -3 || true
           helm search repo spark-operator/spark-operator --versions | head -3 || true
+          helm search repo seaweedfs/seaweedfs --versions | head -3 || true
           helm search repo headlamp/headlamp --versions | head -3 || true
 
   helm-lint-and-render:
@@ -90,7 +93,7 @@ jobs:
       - name: helm dependency build - airflow-tenant
         run: helm dependency build charts/airflow-tenant
       - name: helm lint - airflow-tenant
-        run: helm lint charts/airflow-tenant --set image.tag=3.1.7-hashicorp-1
+        run: helm lint charts/airflow-tenant --set image.tag=3.1.7-hashicorp-2
 
       - name: render tenant-project (scope=project)
         run: helm template tenant-a-project charts/tenant-project -f tests/fixtures/tenant-a-project.yaml > /tmp/render-project.yaml

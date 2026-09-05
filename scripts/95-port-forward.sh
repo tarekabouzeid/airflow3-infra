@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Forwards Argo CD UI (8080), Headlamp (8083), and both tenants' Airflow UIs (8081/8082) to
-# localhost, in the background, detached from this script's own shell so they keep running after
-# it exits (WSL2 and most local setups auto-forward listening localhost ports to the host, so this
-# also works through a VM/container boundary without extra config).
+# Forwards Argo CD UI (8080), Headlamp (8083), Vault UI (8200), SeaweedFS filer (8888), and both
+# tenants' Airflow UIs (8081/8082) to localhost, in the background, detached from this script's own
+# shell so they keep running after it exits (WSL2 and most local setups auto-forward listening
+# localhost ports to the host, so this also works through a VM/container boundary without extra
+# config).
 #
 # Safe to re-run: always stops any port-forwards this script previously started before launching
 # fresh ones - idempotent, and doubles as `bash scripts/95-port-forward.sh stop`.
@@ -53,12 +54,16 @@ mgmt_ctx="$(kctx af-mgmt)"
 a_ctx="$(kctx af-work-a)"
 b_ctx="$(kctx af-work-b)"
 
-start_forward argocd   "${mgmt_ctx}" argocd           argocd-server               8080 443
-start_forward headlamp "${mgmt_ctx}" headlamp         headlamp                    8083 80
-start_forward tenant-a "${a_ctx}"    tenant-a-airflow tenant-a-airflow-api-server 8081 8080
-start_forward tenant-b "${b_ctx}"    tenant-b-airflow tenant-b-airflow-api-server 8082 8080
+start_forward argocd    "${mgmt_ctx}" argocd           argocd-server               8080 443
+start_forward headlamp  "${mgmt_ctx}" headlamp         headlamp                    8083 80
+start_forward vault     "${mgmt_ctx}" vault            vault-ui                    8200 8200
+start_forward seaweedfs "${mgmt_ctx}" seaweedfs        seaweedfs-filer             8888 8888
+start_forward tenant-a  "${a_ctx}"    tenant-a-airflow tenant-a-airflow-api-server 8081 8080
+start_forward tenant-b  "${b_ctx}"    tenant-b-airflow tenant-b-airflow-api-server 8082 8080
 
 log "Argo CD login: admin / \$(kubectl --context ${mgmt_ctx} -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)"
 log "Headlamp login: token from a ServiceAccount in the headlamp namespace, e.g. \`kubectl --context ${mgmt_ctx} -n headlamp create token \$(kubectl --context ${mgmt_ctx} -n headlamp get sa -o jsonpath='{.items[0].metadata.name}')\`"
+log "Vault login: Token method, root token from \`jq -r '.root_token' ${REPO_ROOT}/.local/vault-keys.json\`"
+log "SeaweedFS filer: no auth in this lab - browse buckets/objects directly"
 log "Tenant Airflow login: admin / admin (chart default)"
 log "Stop all: bash scripts/95-port-forward.sh stop"

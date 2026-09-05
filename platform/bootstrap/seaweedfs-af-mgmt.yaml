@@ -1,0 +1,96 @@
+# SeaweedFS: S3-compatible object store, for Airflow remote task-log storage. Runs only on
+# af-mgmt (same placement as Vault - a shared service reachable from af-work-a/af-work-b over the
+# shared `kind` Docker network via a fixed NodePort, exactly like Vault's own
+# service.type=NodePort). Not part of any tenant's execution path directly; Airflow's
+# apache-airflow-providers-amazon S3TaskHandler is the only consumer, via the `s3_logs` Vault
+# connection scripts/46-seed-object-store.sh writes per tenant.
+#
+# Why this exists: KubernetesExecutor worker pods are ephemeral (deleted on completion) and this
+# lab has no persistent+shared logs volume (the official Airflow chart hardcodes that PVC to
+# ReadWriteMany, which KIND's local-path StorageClass cannot satisfy - see docs/architecture.md).
+# Task logs were only ever visible while a task's pod was still alive. Remote logging to an
+# S3-compatible store is Airflow's own documented fix for exactly this KubernetesExecutor gap.
+#
+# SeaweedFS over MinIO: Apache-2.0, not MinIO's now-restricted-OSS licensing (2025).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: seaweedfs
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://seaweedfs.github.io/seaweedfs/helm
+    chart: seaweedfs
+    targetRevision: "4.45.0"   # verified by CI against the real chart index; see versions.env
+    helm:
+      values: |
+        # master/volume/filer all default to hostPath (/ssd, /storage) - fine for the chart's own
+        # single-node-friendly defaults, but a hostPath volume doesn't follow a pod if it's ever
+        # rescheduled, and KIND's local-path StorageClass is the whole point of this lab's "always
+        # rebuildable" storage story. Confirmed real: `kubectl get storageclass` on af-mgmt shows
+        # "standard" (rancher.io/local-path, WaitForFirstConsumer) as the default.
+        master:
+          data:
+            type: "persistentVolumeClaim"
+            size: "1Gi"
+            storageClass: "standard"
+        volume:
+          dataDirs:
+            - name: data1
+              type: "persistentVolumeClaim"
+              storageClass: "standard"
+              size: "5Gi"
+              maxVolumes: 0
+        filer:
+          data:
+            type: "persistentVolumeClaim"
+            size: "2Gi"
+            storageClass: "standard"
+        s3:
+          enabled: true
+          enableAuth: true
+          # scripts/46-seed-object-store.sh creates this Secret (never committed - it holds a live
+          # access/secret key pair) with keys admin_access_key_id/admin_secret_access_key, the
+          # chart's own documented default key names for this identity. The chart reads the keys
+          # through env-var indirection at runtime, not at Helm render time (per its own values.yaml
+          # comment), so this Secret not existing yet at first sync is fine, same reasoning as
+          # headlamp-kubeconfigs' `optional: true`.
+          credentials:
+            admin:
+              existingSecret: seaweedfs-s3-credentials
+          createBuckets:
+            - name: tenant-a-logs
+            - name: tenant-b-logs
+          logs:
+            type: "persistentVolumeClaim"
+            size: "1Gi"
+            storageClass: "standard"
+          # NodePort, matching Vault's own pattern (service.type=NodePort, nodePort=30820) for
+          # cross-cluster reachability: af-work-a/af-work-b are separate KIND clusters and cannot
+          # route to this cluster's ClusterIP Services directly, only to fixed ports on the
+          # af-mgmt-control-plane container name over the shared `kind` Docker network.
+          service:
+            type: NodePort
+            nodePorts:
+              http: 30833
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: seaweedfs
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

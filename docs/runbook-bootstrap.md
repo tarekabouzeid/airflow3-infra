@@ -45,14 +45,19 @@ since their SecretStores couldn't authenticate) will self-heal to Healthy on the
 
 ```bash
 make remote-access      # wires each tenant's "k8s_remote" Airflow connection into Vault
+make seed-object-store  # wires each tenant's "s3_logs" Airflow connection into Vault (SeaweedFS)
 make status             # everything should now read Synced / Healthy
 make port-forward        # tenant Airflow pods exist now - re-run to pick up their UIs too
 make test-integration   # triggers both DAGs for both tenants, polls to completion
 ```
 
 Tenant Airflow UIs are now at http://localhost:8081 (tenant-a) and http://localhost:8082
-(tenant-b), login `admin` / `admin` (chart default). See the [README](../README.md#local-access)
-for the full access table.
+(tenant-b), login `admin` / `admin` (chart default). Vault's own UI is at http://localhost:8200
+(Token method, root token from `jq -r '.root_token' .local/vault-keys.json`), and SeaweedFS's filer
+at http://localhost:8888 (no auth) - use it to browse a task's uploaded logs directly under the
+`tenant-a-logs`/`tenant-b-logs` buckets once `remote_logging` is actually live (see
+`docs/architecture.md#object-storage--remote-task-logs` for the tenant-repo image-tag caveat).
+See the [README](../README.md#local-access) for the full access table.
 
 Tear down with `make teardown` (deletes all 3 clusters + the local registry container; Vault
 keys under `.local/` are left on disk - remove manually if you want a truly clean slate).

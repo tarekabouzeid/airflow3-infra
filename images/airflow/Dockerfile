@@ -1,9 +1,11 @@
-# Adds the two providers not bundled in the base image:
+# Adds the providers not bundled in the base image:
 #  - apache-airflow-providers-hashicorp: the Vault secrets backend (Connections/Variables from
 #    Vault directly - see docs/architecture.md).
 #  - apache-airflow-providers-cncf-kubernetes: KubernetesPodOperator + SparkKubernetesOperator.
 #    Normally already bundled with the base image; pinned explicitly here via requirements.txt +
 #    Airflow's own constraints file so the exact resolved version is always known.
+#  - apache-airflow-providers-amazon: S3Hook/S3TaskHandler for remote task-log storage
+#    (S3-compatible; points at SeaweedFS in this lab, see docs/architecture.md).
 ARG AIRFLOW_VERSION=3.1.7
 FROM apache/airflow:${AIRFLOW_VERSION}
 

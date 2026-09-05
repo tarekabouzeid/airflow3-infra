@@ -87,6 +87,17 @@ spec:
                       "kubernetes_role":"{{.vault.airflowRole}}",
                       "auth_mount_point":"{{.homeCluster.vaultAuthMountPath}}",
                       "url":"http://af-mgmt-control-plane:30820"}
+                  # KubernetesExecutor worker pods are ephemeral (deleted on completion) - without
+                  # this, task logs are gone the moment the pod is (see docs/architecture.md).
+                  # s3_logs is a Vault-backed connection (scripts/65-seed-object-store.sh) pointing
+                  # at SeaweedFS (platform/bootstrap/seaweedfs-af-mgmt.yaml); bucket name matches
+                  # its s3.createBuckets list ({{.tenant}}-logs).
+                  - name: AIRFLOW__LOGGING__REMOTE_LOGGING
+                    value: "True"
+                  - name: AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID
+                    value: "s3_logs"
+                  - name: AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER
+                    value: "s3://{{.tenant}}-logs/airflow-logs"
         - repoURL: "{{.tenantRepoURL}}"
           targetRevision: "{{.tenantRepoBranch}}"
           ref: values

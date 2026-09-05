@@ -25,9 +25,10 @@ The official Airflow chart's persistent logs volume (`logs.persistence`) is disa
 reason, but cannot simply be pinned to ReadWriteOnce like the DAGs PVC: the chart hardcodes that
 PVC's access mode to ReadWriteMany with no values-schema key to override it (confirmed: `helm
 template` rejects `logs.persistence.accessMode` as an unknown property), and `local-path` only
-provisions ReadWriteOnce/ReadWriteOncePod. With it disabled, each task's logs live only in the pod
-that produced them and are lost once that pod is gone - a real limitation of this lab, not
-currently worked around with remote logging (e.g. S3/GCS), which would be the production fix.
+provisions ReadWriteOnce/ReadWriteOncePod. With it disabled, each task's logs would otherwise live
+only in the pod that produced them and be lost once that pod is gone - worked around with remote
+logging to SeaweedFS (see "Object storage / remote task logs" below), Airflow's own documented fix
+for exactly this KubernetesExecutor gap.
 
 ## Argo CD strategy
 
@@ -163,6 +164,37 @@ this one, which is only ever reached via `kubectl port-forward` to localhost by 
 operator (the same threat model this repo already accepts elsewhere: cluster-admin SAs
 everywhere, tenant Airflow's `admin`/`admin` default login).
 
+## Object storage / remote task logs
+
+`platform/bootstrap/seaweedfs-af-mgmt.yaml` deploys SeaweedFS on af-mgmt only - an S3-compatible
+object store, reachable from af-work-a/af-work-b the same way Vault is (`service.type: NodePort`
+on the af-mgmt-control-plane container, over the shared `kind` Docker network; see
+`scripts/lib/common.sh`). Apache-2.0, chosen over MinIO specifically because MinIO's OSS edition is
+no longer fully open-source as of its 2025 licensing change.
+
+Its only purpose is Airflow remote task-log storage. `scripts/65-seed-object-store.sh` generates an
+access/secret key pair (stored as the `seaweedfs-s3-credentials` Secret in the `seaweedfs`
+namespace - never committed, it's a live key pair) and writes an `s3_logs` Airflow connection into
+every tenant's Vault KV mount (`<tenant>/connections/s3_logs`, `conn_type=aws`, `extra` carrying
+`endpoint_url`/`region_name` alongside the keys) - the same VaultBackend mechanism every other
+Airflow connection in this repo already uses. `charts/airflow-tenant` (and
+`platform/bootstrap/appset-tenant-airflow.yaml` for the real per-tenant deployments) set
+`AIRFLOW__LOGGING__REMOTE_LOGGING=True` / `REMOTE_LOG_CONN_ID=s3_logs` /
+`REMOTE_BASE_LOG_FOLDER=s3://<tenant>-logs/airflow-logs`, with one bucket per tenant
+(`s3.createBuckets` in the SeaweedFS Application) matching that folder.
+
+Needs `apache-airflow-providers-amazon` in the custom image (`images/airflow/Dockerfile`) for
+`S3TaskHandler`/`S3Hook` - bumped the image tag to `3.1.7-hashicorp-2` alongside adding it, since
+reusing the old tag would have left nodes serving a stale cached image missing the new provider.
+**Sequencing matters here**: this repo's `platform/bootstrap/appset-tenant-airflow.yaml` applies
+automatically (`selfHeal: true`) to every tenant, so the new `REMOTE_LOGGING` env vars reach
+tenant-a/b as soon as this repo's `main` is synced - regardless of whether either tenant's own
+`deploy/airflow/values.yaml` (a separate, platform-repo-inaccessible git repo) has actually adopted
+image tag `3.1.7-hashicorp-2` yet. Until it has, that tenant's Airflow pods still run the old image
+without `apache-airflow-providers-amazon`, and `remote_logging=True` would fail to load the S3 log
+handler - each tenant repo bumping its own image tag is a required, separate follow-up, not
+something this platform repo can do on a tenant's behalf.
+
 ## Remote workload execution
 
 `scripts/70-remote-access.sh` mints a long-lived token for the `<tenant>-workload-runner`
@@ -191,6 +223,14 @@ deploy Headlamp at all: its whole point (af-work-a/af-work-b reachability via
 `scripts/45-seed-headlamp-kubeconfigs.sh`) needs clusters that don't exist there. `lint.yaml`
 (chart-version verification) and `policy.yaml` (static Application manifest) still cover it; the
 3-cluster reachability itself is only proven by the local bootstrap flow.
+
+SeaweedFS is left out of `e2e-kind.yaml` too, for a different reason: resource budget, not
+topology. `ci/values-airflow-ci.yaml`'s own comments document a GitHub-hosted runner's KIND node at
+only 2 CPU total, already tight enough that Airflow component CPU requests/limits needed hand
+scaling down to fit - adding SeaweedFS's 4 components (master/volume/filer/s3) on top risks
+breaking scheduling for the workload CI actually exists to prove. `lint.yaml`/`policy.yaml` still
+cover its static manifest and chart-version pin; remote logging's real upload/retrieval path is
+proven locally instead (`make seed-object-store`, see `docs/runbook-bootstrap.md`).
 
 The tenant layer in `e2e-kind.yaml` is applied with `helm template | kubectl apply`, not wrapped
 in real Argo CD Applications/ApplicationSets, specifically to avoid needing a GitHub token for a

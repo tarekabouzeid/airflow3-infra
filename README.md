@@ -68,6 +68,7 @@ deviates from the original plan, and
 | Argo CD | 7.8.28 chart / v2.14.11 |
 | HashiCorp Vault | 0.30.0 chart / 1.19.0 |
 | Headlamp | 0.45.0 chart / 0.45.0 |
+| SeaweedFS | 4.45.0 chart / 4.45 |
 | External Secrets Operator | 0.10.4 |
 | Kubeflow Spark Operator | 2.5.2 |
 | Apache Airflow | 1.22.0 chart / 3.1.7 |
@@ -80,13 +81,13 @@ deviates from the original plan, and
 
 ## Local access
 
-`make bootstrap` ends by running `bash scripts/95-port-forward.sh`, which forwards all four UIs
+`make bootstrap` ends by running `bash scripts/95-port-forward.sh`, which forwards all six UIs
 in the background and keeps running after the command that started it exits. Run it again
 standalone any time (already bootstrapped, forwards died, whatever) - it's idempotent, stopping
 anything it previously started before relaunching:
 
 ```bash
-make port-forward         # (re)start all four
+make port-forward         # (re)start all six
 make port-forward-stop    # stop them
 ```
 
@@ -96,6 +97,8 @@ make port-forward-stop    # stop them
 | Tenant A Airflow | http://localhost:8081 | `admin` / `admin` (chart default) |
 | Tenant B Airflow | http://localhost:8082 | `admin` / `admin` (chart default) |
 | Headlamp | http://localhost:8083 | token, see command below - see all 3 clusters from the one UI |
+| Vault | http://localhost:8200 | Token method, root token - see command below |
+| SeaweedFS (filer - browse buckets/objects, incl. `tenant-a-logs`/`tenant-b-logs`) | http://localhost:8888 | none - no auth in front of the filer's own browser UI in this lab |
 
 ```bash
 # Argo CD admin password
@@ -105,6 +108,9 @@ kubectl --context kind-af-mgmt -n argocd get secret argocd-initial-admin-secret 
 # Headlamp login token
 kubectl --context kind-af-mgmt -n headlamp create token \
   "$(kubectl --context kind-af-mgmt -n headlamp get sa -o jsonpath='{.items[0].metadata.name}')"
+
+# Vault root token (from `make vault-init`'s output, gitignored under .local/)
+jq -r '.root_token' .local/vault-keys.json
 ```
 
 Forwarding just one tenant on a specific port also still works directly:

@@ -1,2 +1,3 @@
 apache-airflow-providers-hashicorp
 apache-airflow-providers-cncf-kubernetes
+apache-airflow-providers-amazon
