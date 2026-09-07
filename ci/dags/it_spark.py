@@ -22,17 +22,23 @@ TENANT = "tenant-ci"
 NAMESPACE = f"{TENANT}-workloads"
 SERVICE_ACCOUNT = f"{TENANT}-workload-runner"
 
-# SparkApplication object names are "it-spark-pi-{suffix}-{ts_nodash}" - ts_nodash comes from
-# `spark/spark_pi.yaml`'s own `{{ ts_nodash | lower }}`, rendered by Airflow's standard templating
-# of application_file (application_file is a real templated_field with template_ext including
-# "yaml", so its content gets the full per-task Jinja context, confirmed against the installed
-# provider's source - not a DAG-parse-time uuid). ts_nodash derives from the dag run's
-# logical_date, so every task in one run renders the identical value - `application_name` below
-# uses the exact same expression so wait_local/wait_remote poll for the object that was actually
-# created, not a name only one task's own Python process ever knew about (confirmed locally: a
-# module-level `uuid.uuid4()` looked deterministic but is independently re-evaluated in every
-# task's own pod, since each task re-imports this file from scratch - so submit_local and
-# wait_local silently disagreed on the name almost every run).
+# SparkApplication object names are "it-spark-pi-{suffix}-{sanitized run_id}". run_id (not
+# ts_nodash/ds/ts) is the only per-run identifier guaranteed present: get_template_context()
+# (airflow.sdk.execution_time.task_runner) only adds ts_nodash and friends when
+# dag_run.logical_date is truthy, and a schedule=None DAG triggered without an explicit logical
+# date gets logical_date=None in Airflow 3 - confirmed locally, {{ ts_nodash }} raised
+# "UndefinedError: 'ts_nodash' is undefined" here for exactly that reason. run_id is sanitized
+# (colons/plus/dots/underscores -> '-', lowercased) because Airflow's own default manual run_id
+# ("manual__2026-01-01T00:00:00+00:00") isn't a valid Kubernetes object name otherwise. This
+# expression is duplicated verbatim in spark/spark_pi.yaml's `name:` field (rendered there via
+# application_file, a real templated_field with template_ext including "yaml" - confirmed against
+# the installed provider's source) and in application_name below, so wait_local/wait_remote poll
+# for the exact object submit_local/submit_remote actually created. A module-level
+# `uuid.uuid4()` was tried first and looked deterministic but is independently re-evaluated in
+# every task's own pod (each task re-imports this file from scratch), so submit_local and
+# wait_local silently disagreed on the name almost every run - run_id/ts_nodash-style values work
+# because Airflow computes them once per dag run and injects the same value into every task's
+# context, not because they're computed in this file.
 with DAG(
     dag_id="it_spark",
     description="Integration test: SparkKubernetesOperator, local + remote cluster",
@@ -56,8 +62,8 @@ with DAG(
     #
     # random_name_suffix=False: SparkKubernetesOperator's own create_job_name() appends 8 more
     # random characters onto metadata.name by default - with the object name already deterministic
-    # and unique per dag run via ts_nodash, that extra suffix only breaks wait_*'s ability to know
-    # the real name ahead of time.
+    # and unique per dag run via run_id (see module docstring above), that extra suffix only
+    # breaks wait_*'s ability to know the real name ahead of time.
     #
     # delete_on_termination=False (default is True): SparkKubernetesOperator deletes the
     # SparkApplication object itself the moment the job finishes, which would otherwise race the
@@ -73,7 +79,7 @@ with DAG(
     wait_local = SparkKubernetesSensor(
         task_id="wait_local",
         namespace=NAMESPACE,
-        application_name="it-spark-pi-local-{{ ts_nodash | lower }}",
+        application_name="it-spark-pi-local-{{ run_id | replace(':', '-') | replace('+', '-') | replace('.', '-') | replace('_', '-') | lower }}",
     )
 
     submit_remote = SparkKubernetesOperator(
@@ -88,7 +94,7 @@ with DAG(
     wait_remote = SparkKubernetesSensor(
         task_id="wait_remote",
         namespace=NAMESPACE,
-        application_name="it-spark-pi-remote-{{ ts_nodash | lower }}",
+        application_name="it-spark-pi-remote-{{ run_id | replace(':', '-') | replace('+', '-') | replace('.', '-') | replace('_', '-') | lower }}",
         kubernetes_conn_id="k8s_remote",
     )
 

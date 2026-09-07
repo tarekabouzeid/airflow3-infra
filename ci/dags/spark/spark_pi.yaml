@@ -1,9 +1,10 @@
-# SparkApplication template rendered by SparkKubernetesOperator (Jinja-templated via
-# {{ params.* }} / {{ ds_nodash }}). Deliberately tiny: 1 driver + 1 executor, 512Mi each.
+# SparkApplication template rendered by SparkKubernetesOperator (Jinja-templated via the
+# params dict and run_id - see it_spark.py's module docstring for why run_id, not ts_nodash).
+# Deliberately tiny: 1 driver + 1 executor, 512Mi each.
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: SparkApplication
 metadata:
-  name: it-spark-pi-{{ params.suffix }}-{{ ts_nodash | lower }}
+  name: it-spark-pi-{{ params.suffix }}-{{ run_id | replace(':', '-') | replace('+', '-') | replace('.', '-') | replace('_', '-') | lower }}
   namespace: {{ params.namespace }}
 spec:
   type: Scala
