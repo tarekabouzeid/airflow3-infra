@@ -120,6 +120,7 @@ Forwarding just one tenant on a specific port also still works directly:
 **To rehearse an Argo CD upgrade:** [`docs/runbook-argocd-upgrade.md`](docs/runbook-argocd-upgrade.md).
 **To onboard a new tenant:** [`docs/runbook-tenant-onboarding.md`](docs/runbook-tenant-onboarding.md).
 **Something not working:** [`docs/troubleshooting.md`](docs/troubleshooting.md).
+**To take this off KIND onto real infra (VKS 9 + AWS EKS, MinIO):** [`docs/HYBRID_MIGRATION_PLAN.md`](docs/HYBRID_MIGRATION_PLAN.md).
 
 > Versions were originally pinned from documentation research without Helm-registry access, then
 > corrected against a real local Helm install (Spark Operator was 4 minor releases stale at
