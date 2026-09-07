@@ -54,17 +54,23 @@ with DAG(
     # already fully deterministic from LOCAL_APP_NAME/REMOTE_APP_NAME above, so there's no need to
     # recover it via XCom at all.
     #
-    # delete_on_termination=False (default is True): SparkKubernetesOperator deletes the
-    # SparkApplication object itself the moment the job finishes. wait_local/wait_remote poll that
-    # same object afterward - with the default, they lose the race and 404 (confirmed locally:
-    # submit_* succeeding and the SparkApplication completing is not enough, the object has to
-    # still exist by the time the downstream sensor's own pod gets scheduled a few seconds later).
+    # random_name_suffix=False: SparkKubernetesOperator's own create_job_name() appends 8 more
+    # random characters onto metadata.name by default (confirmed locally: LOCAL_APP_NAME computed
+    # above as "it-spark-pi-local-<uuid>" but the actual created object was
+    # "it-spark-pi-local-<uuid>-<8 more random chars>") - wait_local/wait_remote's
+    # application_name=LOCAL_APP_NAME/REMOTE_APP_NAME then always 404s polling a name that was
+    # never the real one. Uniqueness is already guaranteed by our own _RUN_SUFFIX, so disable it.
+    #
+    # delete_on_termination=False (default is True): belt-and-suspenders alongside the name fix -
+    # SparkKubernetesOperator deletes the SparkApplication object itself the moment the job
+    # finishes, which would otherwise race the downstream sensor's own pod-scheduling latency.
     submit_local = SparkKubernetesOperator(
         task_id="submit_local",
         namespace=NAMESPACE,
         application_file="spark/spark_pi.yaml",
         params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT, "suffix": f"local-{_RUN_SUFFIX}"},
         delete_on_termination=False,
+        random_name_suffix=False,
     )
     wait_local = SparkKubernetesSensor(
         task_id="wait_local",
@@ -78,6 +84,7 @@ with DAG(
         application_file="spark/spark_pi.yaml",
         params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT, "suffix": f"remote-{_RUN_SUFFIX}"},
         delete_on_termination=False,
+        random_name_suffix=False,
         kubernetes_conn_id="k8s_remote",
     )
     wait_remote = SparkKubernetesSensor(
