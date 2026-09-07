@@ -50,9 +50,16 @@ quota:
   # sets explicit per-component resources. limits.cpu: "4" (the old value) couldn't even fit the
   # steady state, let alone the migrate-database/create-user/dag-loader Jobs that run concurrently
   # with it during startup - postgres was stuck permanently unable to schedule as a result.
+  # limits.cpu: "12" (the next value) fit that steady state but left only ~3 CPU of headroom -
+  # not enough once a hook Job (also defaulting to 1 CPU limit) overlaps with two concurrent
+  # KubernetesExecutor task pods, e.g. it_spark's wait_local/wait_remote sensors running at once:
+  # confirmed locally, one of the two would intermittently 403 with "exceeded quota" even though
+  # both tasks and the platform's own RBAC/naming were otherwise correct. The cluster node itself
+  # has 28 allocatable CPUs (`kubectl get nodes -o jsonpath='{.items[0].status.allocatable.cpu}'`),
+  # so this is quota-sizing, not real contention.
   requests.cpu: "4"
   requests.memory: 6Gi
-  limits.cpu: "12"
+  limits.cpu: "16"
   limits.memory: 12Gi
   pods: "20"
 limitRange:
