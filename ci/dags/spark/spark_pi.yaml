@@ -3,7 +3,7 @@
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: SparkApplication
 metadata:
-  name: it-spark-pi-{{ params.suffix }}
+  name: it-spark-pi-{{ params.suffix }}-{{ ts_nodash | lower }}
   namespace: {{ params.namespace }}
 spec:
   type: Scala

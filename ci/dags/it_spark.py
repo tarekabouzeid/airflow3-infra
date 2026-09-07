@@ -8,7 +8,6 @@ For the local tasks we deliberately pass no connection at all: KubernetesHook's 
 the literal "kubernetes_default" conn id is an empty Connection, which resolves to in-cluster
 config automatically (verified against the installed provider's source, not assumed).
 """
-import uuid
 from datetime import datetime, timezone
 
 from airflow import DAG
@@ -23,16 +22,17 @@ TENANT = "tenant-ci"
 NAMESPACE = f"{TENANT}-workloads"
 SERVICE_ACCOUNT = f"{TENANT}-workload-runner"
 
-# Computed once at DAG-parse time, in plain Python - not a Jinja macro like {{ ts_nodash }}.
-# operators/spark_kubernetes.py's own SparkApplication-name rendering context only has `params`
-# in scope, not the full task Jinja context (confirmed locally: {{ ts_nodash }} in the template
-# raised UndefinedError there, even though it renders fine elsewhere). A params dict VALUE that
-# itself contains {{ ... }} is also not re-rendered - it lands in the k8s object name literally,
-# which then gets rejected (only alphanumeric/dashes/dots/underscores allowed).
-_RUN_SUFFIX = uuid.uuid4().hex[:8]
-LOCAL_APP_NAME = f"it-spark-pi-local-{_RUN_SUFFIX}"
-REMOTE_APP_NAME = f"it-spark-pi-remote-{_RUN_SUFFIX}"
-
+# SparkApplication object names are "it-spark-pi-{suffix}-{ts_nodash}" - ts_nodash comes from
+# `spark/spark_pi.yaml`'s own `{{ ts_nodash | lower }}`, rendered by Airflow's standard templating
+# of application_file (application_file is a real templated_field with template_ext including
+# "yaml", so its content gets the full per-task Jinja context, confirmed against the installed
+# provider's source - not a DAG-parse-time uuid). ts_nodash derives from the dag run's
+# logical_date, so every task in one run renders the identical value - `application_name` below
+# uses the exact same expression so wait_local/wait_remote poll for the object that was actually
+# created, not a name only one task's own Python process ever knew about (confirmed locally: a
+# module-level `uuid.uuid4()` looked deterministic but is independently re-evaluated in every
+# task's own pod, since each task re-imports this file from scratch - so submit_local and
+# wait_local silently disagreed on the name almost every run).
 with DAG(
     dag_id="it_spark",
     description="Integration test: SparkKubernetesOperator, local + remote cluster",
@@ -51,38 +51,36 @@ with DAG(
     # sidecar - do_xcom_push=True here just waits forever for a container that will never start
     # (confirmed locally: the SparkApplication itself completed successfully in 13s, while the
     # Airflow task sat "running" for 25+ minutes waiting on the sidecar). The application name is
-    # already fully deterministic from LOCAL_APP_NAME/REMOTE_APP_NAME above, so there's no need to
-    # recover it via XCom at all.
+    # already fully deterministic (see module docstring above), so there's no need to recover it
+    # via XCom at all.
     #
     # random_name_suffix=False: SparkKubernetesOperator's own create_job_name() appends 8 more
-    # random characters onto metadata.name by default (confirmed locally: LOCAL_APP_NAME computed
-    # above as "it-spark-pi-local-<uuid>" but the actual created object was
-    # "it-spark-pi-local-<uuid>-<8 more random chars>") - wait_local/wait_remote's
-    # application_name=LOCAL_APP_NAME/REMOTE_APP_NAME then always 404s polling a name that was
-    # never the real one. Uniqueness is already guaranteed by our own _RUN_SUFFIX, so disable it.
+    # random characters onto metadata.name by default - with the object name already deterministic
+    # and unique per dag run via ts_nodash, that extra suffix only breaks wait_*'s ability to know
+    # the real name ahead of time.
     #
-    # delete_on_termination=False (default is True): belt-and-suspenders alongside the name fix -
-    # SparkKubernetesOperator deletes the SparkApplication object itself the moment the job
-    # finishes, which would otherwise race the downstream sensor's own pod-scheduling latency.
+    # delete_on_termination=False (default is True): SparkKubernetesOperator deletes the
+    # SparkApplication object itself the moment the job finishes, which would otherwise race the
+    # downstream sensor's own pod-scheduling latency.
     submit_local = SparkKubernetesOperator(
         task_id="submit_local",
         namespace=NAMESPACE,
         application_file="spark/spark_pi.yaml",
-        params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT, "suffix": f"local-{_RUN_SUFFIX}"},
+        params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT, "suffix": "local"},
         delete_on_termination=False,
         random_name_suffix=False,
     )
     wait_local = SparkKubernetesSensor(
         task_id="wait_local",
         namespace=NAMESPACE,
-        application_name=LOCAL_APP_NAME,
+        application_name="it-spark-pi-local-{{ ts_nodash | lower }}",
     )
 
     submit_remote = SparkKubernetesOperator(
         task_id="submit_remote",
         namespace=NAMESPACE,
         application_file="spark/spark_pi.yaml",
-        params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT, "suffix": f"remote-{_RUN_SUFFIX}"},
+        params={"namespace": NAMESPACE, "service_account": SERVICE_ACCOUNT, "suffix": "remote"},
         delete_on_termination=False,
         random_name_suffix=False,
         kubernetes_conn_id="k8s_remote",
@@ -90,7 +88,7 @@ with DAG(
     wait_remote = SparkKubernetesSensor(
         task_id="wait_remote",
         namespace=NAMESPACE,
-        application_name=REMOTE_APP_NAME,
+        application_name="it-spark-pi-remote-{{ ts_nodash | lower }}",
         kubernetes_conn_id="k8s_remote",
     )
 
