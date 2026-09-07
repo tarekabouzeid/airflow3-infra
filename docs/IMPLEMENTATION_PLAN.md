@@ -75,7 +75,7 @@ values` does not have the key, it does not exist.
 | External Secrets | `external-secrets/external-secrets` latest | |
 | Vault | `hashicorp/vault` latest | OSS |
 | Spark Operator | `spark-operator/spark-operator` latest | Kubeflow |
-| Spark image | `apache/spark:3.5.x` | must match operator's supported Spark |
+| Spark image | `apache/spark:4.0.x` | must match operator's supported Spark |
 
 ---
 
@@ -243,7 +243,7 @@ Both live in the tenant repo's `dags/`:
   the same pod on `af-work-b` via `kubernetes_conn_id="k8s_remote"`. Each echoes a value mounted from
   the ESO-synced `<tenant>-workload` Secret, proving Vault→ESO→pod in both clusters at once.
 - `it_spark.py` — `SparkKubernetesOperator` submitting `dags/spark/spark_pi.yaml` (spark-pi,
-  `spark.executor.instances: 1`, 512Mi driver/executor, official `apache/spark:3.5.x`), with the same
+  `spark.executor.instances: 1`, 512Mi driver/executor, official `apache/spark:4.0.x`), with the same
   local/remote pair. Confirm current `SparkKubernetesOperator` arguments (`application_file` vs
   `template_spec`) against the provider docs for the pinned provider version — this API changed.
 

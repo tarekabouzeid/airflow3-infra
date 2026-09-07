@@ -72,7 +72,7 @@ deviates from the original plan, and
 | External Secrets Operator | 0.10.4 |
 | Kubeflow Spark Operator | 2.5.2 |
 | Apache Airflow | 1.22.0 chart / 3.1.7 |
-| Spark (jobs) | 3.5.3 |
+| Spark (jobs) | 4.0.4 |
 | Postgres (metadata DB) | 16-alpine |
 | KIND node image | v1.32.8 |
 

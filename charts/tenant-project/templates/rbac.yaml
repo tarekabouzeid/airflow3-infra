@@ -17,7 +17,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "pods/status"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
@@ -30,7 +30,18 @@ rules:
     # "configmaps is forbidden" (a 403, not a 404/missing-secret style error) trying to POST one.
     # secrets stays read-only; Spark only mounts them, never creates one.
     resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection", "update", "patch"]
+  - apiGroups: [""]
+    # Spark's own driver-side cleanup (Client.scala's shutdown hook) issues a single
+    # DELETE ...?labelSelector=spark-app-selector=<id> per resource type - the deletecollection
+    # verb, distinct from delete on a single named object - for every one of pods, configmaps,
+    # services, and persistentvolumeclaims, regardless of whether that type has anything to
+    # clean up. Confirmed locally: without these two resource types granted at all (and without
+    # deletecollection on pods/configmaps above), the driver's cleanup step fails with 403s that
+    # the Kubeflow Spark Operator surfaces as the SparkApplication going to FAILED state even
+    # though the actual Spark job already completed successfully.
+    resources: ["services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
