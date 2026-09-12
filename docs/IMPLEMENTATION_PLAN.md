@@ -384,6 +384,12 @@ make vault-configure    # 3 k8s auth mounts, tenant KV mounts, policies, roles
 make remote-access      # remote SA + kubeconfig into Vault per tenant
 make status             # every Application: Synced/Healthy
 make test-integration   # both tenants × {KPO, Spark} × {local, remote} = 8 tasks
+
+# JupyterHub (manual — must run after vault-configure):
+make jupyterhub-setup   # build hub image, mint SA tokens, write kubeconfig + auth Secrets
+make jupyterhub-sync    # argocd app sync jupyterhub-af-work-a
+# Hub UI: http://localhost:9888  Notebooks: http://localhost:9080 (A) / http://localhost:9081 (B)
+
 make upgrade-argocd VERSION=<3.0.x chart>   # then re-run make status && make test-integration
 make teardown
 ```

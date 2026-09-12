@@ -25,6 +25,10 @@ Kubernetes, managed by a central Argo CD**, running entirely on local KIND clust
   tenant pod may do (image registry, resource ceilings, PriorityClass, Pod Security, node
   pinning). Platform-owned, GitOps-deployed, tenants pick a lane and nothing else. See
   [`docs/runbook-governance.md`](docs/runbook-governance.md).
+- **Shared JupyterHub with cross-cluster notebook spawning**: one hub in af-work-a serves both
+  tenants; users choose "Cluster A" or "Cluster B" and the notebook pod spawns there via
+  `jupyterhub-multicluster-kubespawner`. Hub at `http://localhost:9888`, notebooks at
+  `:9080` (A) / `:9081` (B). See [`docs/runbook-jupyterhub.md`](docs/runbook-jupyterhub.md).
 - **CI in GitHub Actions**: lint, policy checks, rendered-manifest diffs on PRs, a reduced
   single-cluster KIND smoke test, a dedicated real-cluster governance smoke test, and a nightly
   Argo CD upgrade rehearsal.
@@ -58,6 +62,7 @@ Bootstrapped and run end to end on a real local 3-cluster lab (not just CI).
 | `it_kubernetes_pod_operator` (local + cross-cluster) | Passing, both tenants |
 | `it_spark` (local + cross-cluster) | Bugs fixed, each fix verified directly; `make test-integration` can still be disrupted - see below |
 | Kueue + Kyverno governance | Verified on a real KIND cluster (`.github/workflows/governance-kind.yaml`): registry/priority rejections, quota-gated admission, queue-lane-driven priority all confirmed against a live API server. Ships `policy.action: Audit`; see `make governance-enforce` before flipping to `Enforce`. |
+| JupyterHub (cross-cluster) | Hub + ingress-nginx Applications committed; setup script and Makefile targets in place. Requires `make jupyterhub-setup` + `make jupyterhub-sync` after the clusters are up (not auto-synced — see `docs/runbook-jupyterhub.md`). |
 
 **Open issue:** `tenant-a-airflow`/`tenant-b-airflow` sit persistently `OutOfSync` with
 `selfHeal: true`, so Argo CD periodically re-syncs them, regenerating hook-created Secrets and

@@ -9,7 +9,7 @@ Notebook pods spawn in `af-work-a` **or** `af-work-b` depending on the user's pr
 ```
  User's browser
        │
-       ▼  http://localhost:8888
+       ▼  http://localhost:9888
  ┌─────────────┐       kubeconfig (SA tokens)
  │  Hub pod    │ ─────────────────────────────►  af-work-a API server
  │  af-work-a  │ ─────────────────────────────►  af-work-b API server
@@ -19,12 +19,12 @@ Notebook pods spawn in `af-work-a` **or** `af-work-b` depending on the user's pr
        ├─────────────────────────►  af-work-a / jupyter-<username>
        │                                │
        │                           ingress-nginx (contour class)
-       │                           host port 8080
+       │                           host port 9080
        │
        └─────────────────────────►  af-work-b / jupyter-<username>
                                         │
                                    ingress-nginx (contour class)
-                                   host port 8081
+                                   host port 9081
 ```
 
 **Hub → user browser redirect:** after spawn, JupyterHub redirects the user's browser
@@ -50,7 +50,7 @@ make jupyterhub-sync
 
 # 3. Verify:
 make jupyterhub-status
-# Hub UI: http://localhost:8888
+# Hub UI: http://localhost:9888
 ```
 
 The setup script (`scripts/85-jupyterhub-setup.sh`) is idempotent — re-running it rotates
@@ -118,9 +118,9 @@ make jupyterhub-token-rotate
 
 | Endpoint | URL (Docker host) | Route |
 |---|---|---|
-| JupyterHub login | `http://localhost:8888` | NodePort 30888 on af-work-a |
-| Notebook in af-work-a | `http://localhost:8080/user/<name>/` | hostPort 80 on af-work-a node → ingress-nginx |
-| Notebook in af-work-b | `http://localhost:8081/user/<name>/` | hostPort 80 on af-work-b node → ingress-nginx |
+| JupyterHub login | `http://localhost:9888` | NodePort 30888 on af-work-a |
+| Notebook in af-work-a | `http://localhost:9080/user/<name>/` | hostPort 80 on af-work-a node → ingress-nginx |
+| Notebook in af-work-b | `http://localhost:9081/user/<name>/` | hostPort 80 on af-work-b node → ingress-nginx |
 
 ## Authentication
 
@@ -170,7 +170,7 @@ Common causes:
 2. Confirm the KIND extraPortMapping is in effect:
    ```bash
    docker port af-work-a-control-plane
-   # Should show: 0.0.0.0:8080 -> 80/tcp (and 8081 for af-work-b)
+   # Should show: 0.0.0.0:9080 -> 80/tcp (and 9081 for af-work-b)
    ```
 3. Confirm the notebook pod is Running in the remote cluster:
    ```bash

@@ -9,14 +9,16 @@ nodes:
   - role: control-plane
     image: kindest/node:v1.32.8@sha256:abd489f042d2b644e2d033f5c2d900bc707798d075e8186cb65e3f1367a9d5a1
     extraPortMappings:
-      # ingress-nginx DaemonSet binds hostPort 80 on the node; KIND maps that to 8080 on the
-      # Docker host. Notebook pods spawned in af-work-a are reachable at http://localhost:8080.
+      # ingress-nginx DaemonSet binds hostPort 80 on the node; KIND maps that to 9080 on the
+      # Docker host. Notebook pods spawned in af-work-a are reachable at http://localhost:9080.
+      # Port 9xxx avoids conflict with the kubectl port-forwards in scripts/95-port-forward.sh
+      # (which occupy 8080, 8081, 8082, 8083, 8200, 8888).
       - containerPort: 80
-        hostPort: 8080
+        hostPort: 9080
         protocol: TCP
-      # JupyterHub proxy NodePort 30888 → host 8888. Hub UI is at http://localhost:8888.
+      # JupyterHub proxy NodePort 30888 → host 9888. Hub UI is at http://localhost:9888.
       - containerPort: 30888
-        hostPort: 8888
+        hostPort: 9888
         protocol: TCP
 # Registers this node's containerd to treat localhost:5001 as a mirror for the shared local
 # registry container (scripts/20-local-registry.sh). Exact pattern from kind's own docs:

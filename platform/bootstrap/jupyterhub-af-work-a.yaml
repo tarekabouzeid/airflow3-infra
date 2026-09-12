@@ -3,8 +3,8 @@
 # Architecture
 # ───────────────────────────────────────────────────────────────────────────
 # Hub pod        → af-work-a / namespace: jupyterhub
-# Notebook pods  → af-work-a (http://localhost:8080/user/<name>/)
-#                  af-work-b (http://localhost:8081/user/<name>/)
+# Notebook pods  → af-work-a (http://localhost:9080/user/<name>/)
+#                  af-work-b (http://localhost:9081/user/<name>/)
 #
 # Cross-cluster spawn uses jupyterhub-multicluster-kubespawner v0.2 (baked into
 # images/jupyterhub/Dockerfile). The spawner invokes `kubectl --context <name>` to create a
@@ -85,14 +85,14 @@ spec:
                   "default": True,
                   "spawner_override": {
                     "kubernetes_context": "af-work-a",
-                    "ingress_public_url": "http://localhost:8080",
+                    "ingress_public_url": "http://localhost:9080",
                   },
                 },
                 {
                   "display_name": "Cluster B — af-work-b",
                   "spawner_override": {
                     "kubernetes_context": "af-work-b",
-                    "ingress_public_url": "http://localhost:8081",
+                    "ingress_public_url": "http://localhost:9081",
                   },
                 },
               ]
@@ -128,8 +128,8 @@ spec:
               memory: 512Mi
 
         # JupyterHub's built-in configurable-http-proxy.
-        # NodePort 30888 → host port 8888 via kind/af-work-a.yaml extraPortMappings.
-        # Hub UI: http://localhost:8888
+        # NodePort 30888 → host port 9888 via kind/af-work-a.yaml extraPortMappings.
+        # Hub UI: http://localhost:9888
         proxy:
           service:
             type: NodePort

@@ -273,6 +273,72 @@ delaying a task. A consequence worth stating: `KubernetesExecutor` worker pods l
 namespace too, so Airflow's own per-task pods are not currently queued — only the
 `KubernetesPodOperator` and Spark pods they launch are.
 
+## JupyterHub — cross-cluster notebook spawning
+
+A shared JupyterHub hub lives in `af-work-a / namespace: jupyterhub`. Both tenants share one
+hub (DummyAuthenticator, shared password from Vault). Users pick a **profile** — "Cluster A" or
+"Cluster B" — and the hub spawns the notebook pod in the selected cluster.
+
+### Spawner: jupyterhub-multicluster-kubespawner
+
+The hub uses `jupyterhub-multicluster-kubespawner v0.2` (baked into
+`images/jupyterhub/Dockerfile` on top of `quay.io/jupyterhub/k8s-hub:3.3.8`) rather than the
+standard KubeSpawner. The multicluster spawner invokes `kubectl --context <name>` (the `kubectl`
+binary is also baked into the image) to create, in the target cluster:
+
+1. A `Namespace` named `jupyter-<username>`
+2. A `ServiceAccount` for the notebook process
+3. A `Pod` running the notebook image
+4. A `Service` exposing the notebook's HTTP port
+5. An `Ingress` routing `http://localhost:908{0,1}/user/<username>/` to the pod
+
+The hub then returns the Ingress URL to JupyterHub, which **redirects the user's browser** to
+the remote cluster's Ingress directly. The hub does not proxy notebook traffic.
+
+### Ingress: ingress-nginx masquerading as Contour
+
+The spawner hardcodes `ingressClassName: contour` in every Ingress it creates. Rather than
+installing Contour, `ingress-nginx` is deployed in each workload cluster with its `IngressClass`
+resource registered under the name **`contour`** (not the default `nginx`), so the spawner's
+Ingresses are processed by ingress-nginx without any change to the spawner code.
+
+### PORT MAPPING (KIND)
+
+| Endpoint | URL on Docker host | Route |
+|---|---|---|
+| Hub login | `http://localhost:9888` | NodePort 30888 on af-work-a (KIND extra port mapping) |
+| Notebook in af-work-a | `http://localhost:9080/user/<name>/` | KIND port 9080 → node port 80 → ingress-nginx DaemonSet |
+| Notebook in af-work-b | `http://localhost:9081/user/<name>/` | KIND port 9081 → node port 80 → ingress-nginx DaemonSet |
+
+### Kubeconfig Secret
+
+`scripts/85-jupyterhub-setup.sh` mints a long-lived `hub-spawner` ServiceAccount token in each
+cluster (pattern matches `scripts/45-seed-headlamp-kubeconfigs.sh`) and stores a combined
+kubeconfig as `Secret/jupyterhub-multicluster-kubeconfig` in the `jupyterhub` namespace on
+af-work-a. Context names `af-work-a` / `af-work-b` in the kubeconfig match the `spawner_override`
+keys in the Argo CD Application's `hub.extraConfig`.
+
+### Governance interaction
+
+Notebook namespaces (`jupyter-<username>`) are created dynamically by the spawner without the
+`platform.tenant-namespace: "true"` label, so no ClusterPolicy in `cluster-governance` ever
+matches them. The `jupyterhub` namespace is added to the Kyverno engine's
+`resourceFiltersIncludeNamespaces` skip list (`kyverno-af-work-a.yaml`). Notebook pods are
+entirely outside Kueue's `managedJobsNamespaceSelector` — interactive sessions are not queued or
+preempted the way batch jobs are.
+
+### First-time setup (manual before first Argo CD sync)
+
+The Argo CD Application is `syncPolicy: {}` (no automated sync) because the hub pod mounts two
+Secrets that must exist before start:
+
+```bash
+make jupyterhub-setup    # build image, mint tokens, write Secrets
+make jupyterhub-sync     # argocd app sync jupyterhub-af-work-a
+```
+
+See `docs/runbook-jupyterhub.md` for day-2 operations.
+
 ## CI scope (why e2e-kind.yaml is one cluster, not three)
 
 This repo was built without local Docker/Kubernetes access, so GitHub Actions is the primary
