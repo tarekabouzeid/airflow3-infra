@@ -205,6 +205,65 @@ ServiceAccount that `charts/tenant-project` already created (via GitOps) in the 
 `KubernetesPodOperator` and `SparkKubernetesOperator` then reach the remote cluster with
 `kubernetes_conn_id="k8s_remote"` - same Vault-backed mechanism, both operators.
 
+## Governance (Kueue + Kyverno)
+
+Full detail in `docs/runbook-governance.md`; the architectural shape is:
+
+Three enforcement points, at three different times. `conftest` checks the platform's own manifests
+pre-merge; the Argo CD `AppProject` restricts what GitOps may create at sync time; **Kueue and
+Kyverno govern what a running tenant workload may do, at admission time**. The third was the gap:
+Airflow's `KubernetesPodOperator` and the Spark Operator create pods at runtime from DAG code —
+which is essentially all of a tenant's real resource consumption — long after CI and Argo CD are
+out of the picture.
+
+- **Kueue** (`kueue-af-work-{a,b}.yaml`) admits tenant batch work against quota. Per tenant per
+  cluster, `charts/tenant-queue` renders a `<tenant>-high` ClusterQueue holding that tenant's
+  guaranteed `nominalQuota` and a `<tenant>-low` queue with `nominalQuota: 0` that runs purely on
+  capacity borrowed from idle cohort-mates and is the first thing reclaimed. Both sit in one
+  `tenants` cohort. Tenants pick a lane with the `kueue.x-k8s.io/queue-name` label; how big each
+  lane is comes from the platform-owned registry.
+- **Kyverno** (`kyverno-af-work-{a,b}.yaml`) constrains workload shape: registry allowlist,
+  per-container resource ceiling, PriorityClass allowlist, Pod Security Standards, host ports,
+  node pinning, Service types. Chosen over Gatekeeper because the defaulting rules need real
+  conditional mutation, and because keeping admission policy in Kyverno YAML leaves Rego meaning
+  exactly one thing in this repo (`conftest`, at CI time) rather than two similar-looking dialects.
+- **`charts/cluster-governance`** holds the cluster-scoped objects both depend on: four
+  `PriorityClass`es, the `ResourceFlavor`, the `Cohort`, and the `ClusterPolicy` set.
+
+### Deviation worth noting: queues are platform-owned, not tenant-owned
+
+`appset-tenant-queues.yaml` runs under `project: default`, unlike every other tenant-facing
+Application. `ClusterQueue` is cluster-scoped, and a tenant `AppProject` deliberately whitelists
+nothing cluster-scoped except `Namespace` — rendering queues under the tenant's own project would
+mean widening that whitelist to `ClusterQueue`, which is exactly the permission that would let a
+tenant mint themselves quota. So the platform renders them, from numbers held in
+`platform/tenants/*/workloads-*.yaml`.
+
+### Sync waves
+
+Governance forced the wave layout to grow: `1` operators (ESO, Spark Operator, Kueue, Kyverno),
+`2` governance objects, `3` tenant namespaces and workloads (moved down from 2), `4` tenant queues.
+Wave 2 has to precede wave 3 because Kyverno mutates a `PriorityClass` onto every tenant pod and a
+pod naming a class that does not yet exist is rejected outright.
+
+### One priority ladder, not two
+
+Kueue has its own `WorkloadPriorityClass` concept, and this platform deliberately does not use it.
+Absent an explicit priority label, Kueue derives a Workload's queueing priority from the pod's
+ordinary Kubernetes `PriorityClass` — so `platform-critical` > `tenant-airflow` >
+`tenant-workload-high` > `tenant-workload-low` is one ladder honoured by both the kube-scheduler
+and Kueue, rather than two that can silently disagree. Kyverno derives the class from the queue
+lane the tenant chose, so a tenant sets one field and the two cannot be made inconsistent.
+
+### What is not queued, and why
+
+A tenant's Airflow control plane (`<tenant>-airflow`) is deliberately outside Kueue's
+`managedJobsNamespaceSelector`. Kueue's `deployment`/`statefulset` integrations would suspend a
+scheduler or api-server pending quota, taking the tenant's whole Airflow offline rather than
+delaying a task. A consequence worth stating: `KubernetesExecutor` worker pods land in that
+namespace too, so Airflow's own per-task pods are not currently queued — only the
+`KubernetesPodOperator` and Spark pods they launch are.
+
 ## CI scope (why e2e-kind.yaml is one cluster, not three)
 
 This repo was built without local Docker/Kubernetes access, so GitHub Actions is the primary
