@@ -297,3 +297,34 @@ spec:
           drop: ["ALL"]
         seccompProfile:
           type: RuntimeDefault
+---
+# A task the tenant explicitly put in the guaranteed lane, but which names no PriorityClass - the
+# normal case, since the queue label is the only thing a tenant is asked to set. The mutate rules
+# must derive tenant-workload-high from the lane, not leave it on the low default: a pod drawing
+# on the high ClusterQueue's guaranteed quota while carrying the low PriorityClass would be first
+# in line for the capacity and last in line for the CPU.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: high-lane-task
+  namespace: tenant-a-workloads
+  labels:
+    kueue.x-k8s.io/queue-name: high
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: task
+      image: apache/spark:4.0.4
+      resources:
+        requests: {cpu: "100m", memory: 128Mi}
+        limits: {cpu: "1", memory: 1Gi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault

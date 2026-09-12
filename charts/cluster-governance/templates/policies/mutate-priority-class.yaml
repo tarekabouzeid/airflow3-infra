@@ -52,6 +52,39 @@ spec:
         patchStrategicMerge:
           spec:
             +(priorityClassName): {{ .Values.priorityClasses.tenantAirflow.name }}
+    # The lane a tenant picked and the PriorityClass the pod carries have to agree. They are
+    # separate mechanisms - the LocalQueue decides which pool of quota the work draws from, the
+    # PriorityClass decides scheduling order and who gets preempted - and a tenant setting one
+    # without the other (or setting them to disagree) is the obvious way to end up with
+    # "high-priority" work that is last in line. So the platform derives the class FROM the lane
+    # rather than asking tenants to keep two fields in sync.
+    #
+    # Split across two rules matched by label selector rather than one rule with a JMESPath
+    # precondition: a selector needs no inline expression, so this file stays free of the
+    # Kyverno-vs-Helm delimiter collision (both use the same doubled braces, and Helm parses
+    # them even inside a YAML comment - which is how this very comment broke the render once).
+    # The NotIn selector below also matches pods carrying no
+    # queue-name label at all, which is what a Kubernetes label selector does for an absent key -
+    # so the two rules are exhaustive and, importantly, order-independent.
+    - name: default-high-lane-priority
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              operations:
+                - CREATE
+              namespaceSelector:
+                {{- include "cluster-governance.workloadNamespaceSelector" . | nindent 16 }}
+              selector:
+                matchLabels:
+                  kueue.x-k8s.io/queue-name: {{ .Values.policy.scheduling.highLaneQueueName }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      mutate:
+        patchStrategicMerge:
+          spec:
+            +(priorityClassName): {{ .Values.priorityClasses.tenantWorkloadHigh.name }}
     - name: default-workload-priority
       match:
         any:
@@ -62,11 +95,17 @@ spec:
                 - CREATE
               namespaceSelector:
                 {{- include "cluster-governance.workloadNamespaceSelector" . | nindent 16 }}
+              selector:
+                matchExpressions:
+                  - key: kueue.x-k8s.io/queue-name
+                    operator: NotIn
+                    values:
+                      - {{ .Values.policy.scheduling.highLaneQueueName }}
       exclude:
         {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
       mutate:
         patchStrategicMerge:
           spec:
-            # Low, not high: an unlabelled task is one nobody has claimed is urgent. A tenant
-            # that wants the high lane says so, on the workload, and gets it.
+            # Low, not high: work nobody explicitly put in the high lane is work nobody has
+            # claimed is urgent. A tenant that wants the guaranteed lane asks for it by name.
             +(priorityClassName): {{ .Values.priorityClasses.tenantWorkloadLow.name }}

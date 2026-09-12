@@ -115,6 +115,14 @@ policy:
       - "postgres:*"
       - "docker.io/library/postgres:*"
       - "docker.io/postgres:*"
+      # busybox, used by the tenant repos' KubernetesPodOperator integration-test DAGs
+      # (airflow3-infra-tenant-{a,b}: dags/it_kubernetes_pod_operator.py). Found by reading what
+      # the tenants actually run rather than by guessing - the first draft of this allowlist
+      # omitted it, which would have rejected both tenants' KPO tasks the moment
+      # policy.action flipped to Enforce.
+      - "busybox:*"
+      - "docker.io/library/busybox:*"
+      - "docker.io/busybox:*"
     # Images a tenant pod may NEVER use regardless of registry, checked separately from the
     # allowlist so the failure message can say WHY. ":latest" is repo rule 7; an image with no
     # tag at all resolves to :latest, so both are rejected by requiring an explicit tag.
@@ -151,6 +159,10 @@ policy:
     # PriorityClasses a tenant pod may name. Anything outside this list - notably
     # platform-critical, system-cluster-critical and system-node-critical - would let a tenant
     # outrank the platform components that keep its own Airflow running.
+    # The LocalQueue name that means "the guaranteed lane". Must match
+    # charts/tenant-queue's queues.high.localQueueName - it is what the priority-defaulting
+    # rules select on to derive a pod's PriorityClass from the lane its tenant chose.
+    highLaneQueueName: high
     allowedTenantPriorityClasses:
       - tenant-airflow
       - tenant-workload-high

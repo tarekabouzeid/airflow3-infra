@@ -148,6 +148,13 @@ results:
       - unprioritised-task
     patchedResources: resources/patched-priority.yaml
   - policy: tenant-default-priority-class
+    rule: default-high-lane-priority
+    kind: Pod
+    result: pass
+    resources:
+      - high-lane-task
+    patchedResources: resources/patched-priority.yaml
+  - policy: tenant-default-priority-class
     rule: default-airflow-control-plane-priority
     kind: Pod
     result: pass
