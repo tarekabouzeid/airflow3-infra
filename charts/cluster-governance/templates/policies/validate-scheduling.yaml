@@ -1,0 +1,117 @@
+{{- /*
+The ways a tenant pod could step outside the resource accounting that everything else in this
+platform depends on: naming a node directly, tolerating the control-plane taint, binding a host
+port, or claiming a PriorityClass that outranks the platform.
+
+The PriorityClass rule is the load-bearing one. Everything else here assumes platform components
+outrank tenant work; a tenant that can set `priorityClassName: system-cluster-critical` inverts
+that and can evict the very Argo CD and Kueue instances that are supposed to be governing it.
+*/ -}}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tenant-scheduling-bounds
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Bound tenant scheduling choices
+    policies.kyverno.io/category: Multi-tenancy
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Tenant pods may not pin themselves to a node, tolerate control-plane taints, bind host
+      ports, or claim a PriorityClass outside the tenant range.
+spec:
+  background: true
+  rules:
+{{- if .Values.policy.scheduling.allowedTenantPriorityClasses }}
+    - name: allowed-priority-classes
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Tenant pods may only use these PriorityClasses:
+          {{ join ", " .Values.policy.scheduling.allowedTenantPriorityClasses }}. Naming
+          platform-critical or a system-* class would let tenant work preempt the platform
+          components the tenant's own Airflow depends on.
+        pattern:
+          spec:
+            # No =() anchor: by the time this rule runs, mutate-priority-class.yaml has already
+            # added a default for any pod that named none, so the field is always present and
+            # requiring it here catches a pod that somehow skipped mutation.
+            priorityClassName: {{ join " | " .Values.policy.scheduling.allowedTenantPriorityClasses | quote }}
+{{- end }}
+{{- if .Values.policy.scheduling.denyNodeName }}
+    - name: deny-node-pinning
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Tenant pods must not set spec.nodeName. Naming a node bypasses the scheduler entirely,
+          which means it also bypasses quota, priority and Kueue admission.
+        pattern:
+          spec:
+            X(nodeName): "null"
+{{- end }}
+{{- if .Values.policy.scheduling.denyControlPlaneTolerations }}
+    - name: deny-control-plane-tolerations
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Tenant pods must not tolerate control-plane taints - control-plane nodes are not tenant
+          capacity. (Inert on this lab's single-node, untainted KIND clusters; correct and
+          load-bearing on any real multi-node cluster.)
+        pattern:
+          spec:
+            =(tolerations):
+              - key: "!node-role.kubernetes.io/control-plane & !node-role.kubernetes.io/master"
+{{- end }}
+{{- if .Values.policy.scheduling.denyHostPorts }}
+    - name: deny-host-ports
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Tenant pods must not bind host ports. A hostPort is a port on the node that no other
+          tenant can then use - a cluster-level resource claimed from inside a namespace.
+        pattern:
+          spec:
+            =(initContainers):
+              - =(ports):
+                  - X(hostPort): "null"
+            containers:
+              - =(ports):
+                  - X(hostPort): "null"
+{{- end }}

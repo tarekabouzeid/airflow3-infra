@@ -1,0 +1,72 @@
+{{- /*
+Default a PriorityClass onto every tenant pod that names none, chosen by what the namespace is
+FOR. This is why priorityClasses.globalDefault is false everywhere: a global default cannot tell
+a tenant's Airflow scheduler apart from a tenant's Spark executor, and getting that backwards is
+how a batch task ends up outranking the scheduler that launched it.
+
+Kyverno runs mutating rules in the mutating admission phase and validating rules in the
+validating phase, so this always lands before validate-scheduling.yaml's allowed-priority-classes
+rule reads the field.
+
+`+(key)` is Kyverno's "add if not present" anchor - a pod that already names an allowed class
+keeps it, and one that names a disallowed class is left alone here and rejected by the validate
+rule, which reports the real problem instead of silently overwriting it.
+
+Note there is deliberately NO mutate rule for the Kueue queue label. Kueue handles that itself:
+`manageJobsWithoutQueueName: true` scoped by `managedJobsNamespaceSelector` makes every workload
+in a tenant workload namespace managed whether or not it asks to be, and the LocalQueue named
+`default` that charts/tenant-queue creates in each of those namespaces is picked up by Kueue's
+LocalQueueDefaulting (stable since Kueue v0.17). Doing it in Kueue rather than here means there
+is no window in which a pod is admitted by the API server but unknown to the quota system.
+*/ -}}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tenant-default-priority-class
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Default tenant PriorityClass
+    policies.kyverno.io/category: Multi-tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Gives every tenant pod a PriorityClass appropriate to the namespace it lands in, so that
+      neither the kube-scheduler nor Kueue ever has to rank an unclassified pod.
+spec:
+  background: false
+  rules:
+    - name: default-airflow-control-plane-priority
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              operations:
+                - CREATE
+              namespaceSelector:
+                matchLabels:
+                  platform.namespace-role: airflow
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      mutate:
+        patchStrategicMerge:
+          spec:
+            +(priorityClassName): {{ .Values.priorityClasses.tenantAirflow.name }}
+    - name: default-workload-priority
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              operations:
+                - CREATE
+              namespaceSelector:
+                {{- include "cluster-governance.workloadNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      mutate:
+        patchStrategicMerge:
+          spec:
+            # Low, not high: an unlabelled task is one nobody has claimed is urgent. A tenant
+            # that wants the high lane says so, on the workload, and gets it.
+            +(priorityClassName): {{ .Values.priorityClasses.tenantWorkloadLow.name }}

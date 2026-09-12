@@ -1,0 +1,181 @@
+# The workload cluster this release governs. Only used for labelling/description - every object
+# this chart renders is cluster-scoped, so one release per cluster is the unit.
+clusterName: af-work-a
+
+# --- scheduling priority (kube-scheduler) ---------------------------------------------------
+# These are ordinary Kubernetes PriorityClasses, NOT Kueue's WorkloadPriorityClass. They decide
+# two things Kueue does not: which pod the kube-scheduler places first when nodes are tight, and
+# which pod the kubelet evicts first under node pressure.
+#
+# They also feed Kueue: absent an explicit `kueue.x-k8s.io/priority-class` label, Kueue derives a
+# Workload's queueing/preemption priority from the pod's own PriorityClass value (see Kueue's
+# "Run job with WorkloadPriority" docs). That is deliberate here - injecting one PriorityClass
+# per workload class gives us ONE priority concept that both the kube-scheduler and Kueue honour,
+# instead of two parallel ladders that can silently disagree.
+#
+# globalDefault is set on none of them on purpose: globalDefault applies cluster-wide, including
+# to platform components that simply forgot a class. Defaulting is done per-namespace by the
+# Kyverno mutate rules in templates/policies/mutate-priority-class.yaml instead, which can tell a
+# tenant's Airflow namespace from a tenant's workload namespace.
+priorityClasses:
+  # Platform components that the cluster cannot lose without losing the platform: Argo CD,
+  # Vault, External Secrets, Spark Operator, Kueue and Kyverno themselves. Deliberately BELOW
+  # the built-in system-cluster-critical (2000000000) - these are important, but they are not
+  # more important than the cluster's own control plane add-ons.
+  platformCritical:
+    name: platform-critical
+    value: 1000000
+    description: "Platform components (Argo CD, Vault, ESO, Spark Operator, Kueue, Kyverno)."
+  # A tenant's Airflow control plane: scheduler, dag-processor, api-server, triggerer, postgres.
+  # Well above tenant task work: losing a scheduler stalls every DAG the tenant has, while losing
+  # one task pod costs one task retry.
+  tenantAirflow:
+    name: tenant-airflow
+    value: 100000
+    description: "A tenant's Airflow control plane - scheduler, dag-processor, api-server, triggerer, metadata DB."
+  # Tenant batch work, high lane.
+  tenantWorkloadHigh:
+    name: tenant-workload-high
+    value: 1000
+    description: "Tenant batch work submitted to the tenant's high-priority Kueue queue."
+  # Tenant batch work, low lane. preemptionPolicy: Never - a low-priority pod may be preempted,
+  # but must never itself trigger the eviction of anything else. Without this, a large enough
+  # burst of low-priority pods could still push other pods out simply by being numerous.
+  tenantWorkloadLow:
+    name: tenant-workload-low
+    value: 100
+    preemptionPolicy: Never
+    description: "Tenant batch work submitted to the tenant's low-priority (opportunistic) Kueue queue."
+
+# --- Kueue topology --------------------------------------------------------------------------
+kueue:
+  # Single flavor: every cluster in this lab is a single homogeneous KIND node, so there is no
+  # node-shape distinction to model. On a real cluster this is where "spot vs on-demand" or
+  # "gpu vs cpu" would be split out, each with its own nodeLabels/nodeTaints.
+  flavor:
+    name: default-flavor
+    nodeLabels: {}
+    nodeTaints: []
+  # Every tenant ClusterQueue on this cluster joins this cohort. A cohort is what makes the
+  # low-priority lane worth having: a ClusterQueue may borrow its cohort-mates' UNUSED nominal
+  # quota, so a tenant's low queue (nominalQuota 0, see charts/tenant-queue) runs purely on
+  # capacity nobody else is using right now, and gives it straight back when they want it.
+  cohort:
+    name: tenants
+    # Optional hard ceiling on the whole cohort - the sum of what every tenant queue may hold at
+    # once, borrowing included. Left empty: the effective ceiling is then the sum of the member
+    # ClusterQueues' nominalQuota, which is what we want while quotas are small and hand-set.
+    quota: {}
+    #   cpu: "20"
+    #   memory: 40Gi
+
+# --- Kyverno policy --------------------------------------------------------------------------
+policy:
+  # Audit | Enforce. Ships as Audit: every rule below is evaluated and reported in the
+  # PolicyReport for the namespace, but nothing is rejected. Flip to Enforce (one value, one
+  # commit) once e2e-kind has shown a full Airflow + Spark + ESO run producing zero violations.
+  # Rolling this out the other way round - Enforce first - risks a rule with a blind spot
+  # bricking every tenant namespace on the first sync, with Argo CD dutifully re-applying it.
+  action: Audit
+
+  # Applied to every rule so a policy can never evaluate a platform component's own pods.
+  # Kyverno additionally ignores kube-system by default (config.webhooks.namespaceSelector) and
+  # filters a long list of resources (config.resourceFilters) - this is belt and braces on top.
+  excludedNamespaces:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+    - kyverno
+    - kueue-system
+    - argocd
+    - vault
+    - external-secrets
+    - spark-operator
+
+  images:
+    # Registries a TENANT pod may pull from. Patterns are Kyverno glob patterns; "|" means "any
+    # of". Both the bare and the docker.io-prefixed spelling of each Docker Hub image are listed
+    # deliberately: Kyverno's config.enableDefaultRegistryMutation (true by default) normalises
+    # image references to include the default registry in some contexts but a manifest may also
+    # carry the short form verbatim, and a pattern that only matched one spelling would pass or
+    # fail depending on which code path produced the string.
+    allowed:
+      # The KIND lab's own registry - where images/airflow/Dockerfile's output is pushed
+      # (scripts/20-local-registry.sh). Reached as localhost:5001 from the host and
+      # kind-registry:5000 from inside a node.
+      - "localhost:5001/*"
+      - "kind-registry:5000/*"
+      # Apache Spark, the executor image SparkApplications run (versions.env: SPARK_IMAGE).
+      - "apache/spark:*"
+      - "docker.io/apache/spark:*"
+      # alpine/git, the DAG-loader Job's image (charts/airflow-tenant/values.yaml: dagLoader.image).
+      - "alpine/git:*"
+      - "docker.io/alpine/git:*"
+      # Postgres, the tenant metadata DB (versions.env: POSTGRES_IMAGE).
+      - "postgres:*"
+      - "docker.io/library/postgres:*"
+      - "docker.io/postgres:*"
+    # Images a tenant pod may NEVER use regardless of registry, checked separately from the
+    # allowlist so the failure message can say WHY. ":latest" is repo rule 7; an image with no
+    # tag at all resolves to :latest, so both are rejected by requiring an explicit tag.
+    requireExplicitTag: true
+
+  resources:
+    # Ceiling on what ONE container may ask for. This is a different question from the namespace
+    # ResourceQuota that charts/tenant-project already sets: the quota caps a tenant's TOTAL
+    # across the namespace, which a single greedy pod can consume entirely, starving every other
+    # task the same tenant is running. This caps the individual ask.
+    #
+    # Sized against the namespace quota in charts/tenant-project/values.yaml (limits.cpu "16",
+    # limits.memory 12Gi): one container may take at most a quarter of the CPU and two thirds of
+    # the memory, so a tenant always has room for concurrent work.
+    maxContainer:
+      cpu: "4"
+      memory: 8Gi
+    # Require every container to state requests AND limits. Without requests the scheduler
+    # cannot place the pod sensibly and Kueue cannot size the Workload (it would admit a pod it
+    # believes costs nothing); without limits one container can starve its node-mates. The
+    # LimitRange in charts/tenant-project supplies defaults, so this rule only ever fires on a
+    # pod that explicitly set one and not the other.
+    require: true
+
+  scheduling:
+    # Tenants must not be able to choose a node directly, tolerate the control-plane taint, or
+    # bind a host port - all three are ways out of the resource accounting everything else here
+    # depends on. (This lab's KIND clusters are single-node and untainted, so the control-plane
+    # toleration rule is inert here; it is still correct for any real multi-node cluster and
+    # costs nothing to carry.)
+    denyNodeName: true
+    denyControlPlaneTolerations: true
+    denyHostPorts: true
+    # PriorityClasses a tenant pod may name. Anything outside this list - notably
+    # platform-critical, system-cluster-critical and system-node-critical - would let a tenant
+    # outrank the platform components that keep its own Airflow running.
+    allowedTenantPriorityClasses:
+      - tenant-airflow
+      - tenant-workload-high
+      - tenant-workload-low
+
+  podSecurity:
+    # Kyverno's built-in Pod Security Standards check. This is the SECOND line: charts/tenant-project
+    # also stamps the namespace with pod-security.kubernetes.io/enforce labels, which the API
+    # server applies with no webhook involved. If Kyverno is down or its webhook is bypassed, the
+    # namespace labels still hold the baseline - which is exactly why the cheap always-on control
+    # carries the level we cannot afford to lose.
+    level: restricted
+    version: latest
+    # Controls exempted from `restricted`. Airflow's official chart and the Spark images set a
+    # numeric runAsUser but do not set seccompProfile or drop ALL capabilities on every container,
+    # so enforcing those two outright would reject legitimate platform-supplied workloads. They
+    # are carried as exclusions rather than dropping to `baseline` wholesale, so the rest of
+    # `restricted` (no privilege escalation, no root filesystem writes where declared, runAsNonRoot)
+    # still applies and the gap is explicit and greppable.
+    exclude:
+      - controlName: "Seccomp"
+      - controlName: "Capabilities"
+
+  services:
+    # NodePort and LoadBalancer are cluster-level resources: a NodePort is a port on every node
+    # that no other tenant can then use, and a LoadBalancer provisions (and bills for) real
+    # infrastructure. Tenant traffic is in-namespace or through the platform's own ingress.
+    denyNodePortAndLoadBalancer: true

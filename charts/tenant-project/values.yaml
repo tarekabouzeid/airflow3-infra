@@ -62,6 +62,24 @@ quota:
   limits.cpu: "16"
   limits.memory: 12Gi
   pods: "20"
+# Pod Security Admission labels stamped on this namespace. Enforced by the API server itself -
+# no admission webhook involved - which is precisely why the level that must never lapse lives
+# here rather than in Kyverno. charts/cluster-governance adds `restricted` on top through Kyverno,
+# where violations become PolicyReports and can be rolled out in Audit mode first.
+#
+# enforce is `baseline`, not `restricted`, deliberately: `restricted` additionally demands
+# seccompProfile and an explicit drop of ALL capabilities on every container, which neither the
+# upstream Airflow chart nor the apache/spark images set on every container. Enforcing it at the
+# namespace level would reject platform-supplied workloads outright with no way to grant an
+# exception, whereas the Kyverno copy can carry per-control exclusions (see that chart's
+# policy.podSecurity.exclude) and still report the gap.
+podSecurity:
+  enabled: true
+  enforce: baseline
+  audit: restricted
+  warn: restricted
+  version: latest
+
 limitRange:
   defaultRequestCPU: 100m
   defaultRequestMemory: 128Mi

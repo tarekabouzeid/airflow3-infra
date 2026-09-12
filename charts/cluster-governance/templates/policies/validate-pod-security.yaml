@@ -1,0 +1,48 @@
+{{- /*
+Pod Security Standards, via Kyverno's built-in check.
+
+This is the SECOND line, not the first. charts/tenant-project also stamps every tenant namespace
+with pod-security.kubernetes.io/enforce=baseline, which the API server applies natively with no
+webhook in the path. That split is the point: the control we cannot afford to lose (baseline - no
+privileged containers, no host namespaces, no hostPath) holds even if Kyverno is down or its
+webhook is bypassed, while the tighter `restricted` level rides on Kyverno where we get policy
+reports, an Audit phase, and per-control exclusions.
+*/ -}}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tenant-pod-security
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Tenant Pod Security Standards
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Applies the {{ .Values.policy.podSecurity.level }} Pod Security Standard to tenant
+      workloads, minus the controls listed as exclusions in the chart values.
+spec:
+  background: true
+  rules:
+    - name: pod-security-standard
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Tenant pods must satisfy the {{ .Values.policy.podSecurity.level }} Pod Security
+          Standard.
+        podSecurity:
+          level: {{ .Values.policy.podSecurity.level }}
+          version: {{ .Values.policy.podSecurity.version | quote }}
+          {{- with .Values.policy.podSecurity.exclude }}
+          exclude:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

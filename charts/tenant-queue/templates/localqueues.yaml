@@ -1,0 +1,40 @@
+{{- /*
+The namespaced handle tenants actually reference. A tenant selects a lane by putting
+`kueue.x-k8s.io/queue-name: high` (or `low`) on the workload - a label on the Pod for a
+KubernetesPodOperator task, or on the SparkApplication's own metadata for a Spark job.
+
+LocalQueue is namespaced, so a tenant can only ever name a queue that exists in their own
+namespace: there is no spelling of this label that reaches another tenant's quota.
+*/ -}}
+{{- range $lane := (list "high" "low") }}
+{{- $q := index $.Values.queues $lane }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: {{ $q.localQueueName }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "tenant-queue.labels" $ | nindent 4 }}
+    platform.queue-lane: {{ $lane }}
+spec:
+  clusterQueue: {{ $.Values.tenant }}-{{ $lane }}
+{{- end }}
+{{- if .Values.defaultLocalQueue.enabled }}
+---
+# A third LocalQueue, pointing at the same ClusterQueue as the "{{ .Values.defaultLocalQueue.target }}"
+# lane. Its only job is its NAME: Kueue's LocalQueueDefaulting assigns a workload with no
+# queue-name label to the LocalQueue literally called "default" in its namespace. Without this
+# object, an unlabelled pod in a Kueue-managed namespace has no queue to go to and is held
+# indefinitely rather than running opportunistically.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: {{ .Values.defaultLocalQueue.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "tenant-queue.labels" . | nindent 4 }}
+    platform.queue-lane: {{ .Values.defaultLocalQueue.target }}
+spec:
+  clusterQueue: {{ .Values.tenant }}-{{ .Values.defaultLocalQueue.target }}
+{{- end }}

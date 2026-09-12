@@ -1,0 +1,79 @@
+tenant: tenant-a
+clusterName: af-work-a
+# The namespace the LocalQueues are created in - where this tenant's TASKS land on this cluster.
+# Always "<tenant>-workloads"; the tenant's Airflow control-plane namespace is deliberately not
+# Kueue-managed (see docs/runbook-governance.md, "What is and is not queued").
+namespace: tenant-a-workloads
+
+# Must match charts/cluster-governance's kueue.flavor.name / kueue.cohort.name on this cluster.
+# Both are fed from the same place by platform/bootstrap, so they cannot drift in practice.
+flavorName: default-flavor
+cohortName: tenants
+
+queues:
+  # --- the guaranteed lane -------------------------------------------------------------------
+  # nominalQuota here is what this tenant is actually PROMISED on this cluster: capacity that is
+  # theirs whether or not anyone else is busy, reclaimable from anyone who borrowed it.
+  high:
+    localQueueName: high
+    nominalQuota:
+      cpu: "6"
+      memory: 12Gi
+      pods: "20"
+    # How far above nominal this queue may borrow from cohort-mates. Left empty = no limit beyond
+    # what the cohort has. Set per-resource to stop one tenant's burst from consuming the whole
+    # cluster even when it is idle.
+    borrowingLimit:
+      cpu: "6"
+      memory: 12Gi
+    preemption:
+      # Take back capacity that cohort-mates borrowed beyond their own nominal quota. This is the
+      # mechanism that makes the low lane genuinely opportunistic rather than just "also running":
+      # low borrows idle capacity, high reclaims it when it wants it.
+      reclaimWithinCohort: Any
+      # When this queue is itself borrowing, it may preempt only strictly lower-priority
+      # workloads in other ClusterQueues - never same-or-higher-priority work, which would make
+      # borrowing a way to outrank the queue you borrowed from.
+      borrowWithinCohort:
+        policy: LowerPriority
+      # Within this queue, a higher-priority workload may preempt a lower-priority one. Priority
+      # comes from the pod's PriorityClass (tenant-workload-high / tenant-workload-low), which
+      # charts/cluster-governance defaults per namespace - so one ladder, not two.
+      withinClusterQueue: LowerPriority
+
+  # --- the opportunistic lane ----------------------------------------------------------------
+  # nominalQuota 0 across the board, deliberately. This queue owns nothing; it runs entirely on
+  # capacity its cohort-mates are not using, and gives it back the moment they want it. That is a
+  # supported, documented Kueue configuration (see Kueue's "Administer cluster quotas" - cohorts
+  # with zero nominal quota and borrowing), not a degenerate case.
+  #
+  # The practical effect a tenant sees: work in the low lane starts whenever the cluster is quiet
+  # and may be evicted when it is not. Work in the high lane starts when the tenant's own
+  # guaranteed share is free, and is not evicted to make room for anyone else's borrowing.
+  low:
+    localQueueName: low
+    nominalQuota:
+      cpu: "0"
+      memory: "0"
+      pods: "0"
+    # No borrowingLimit: this queue may borrow whatever the cohort has spare. The cohort-level
+    # ceiling (charts/cluster-governance: kueue.cohort.quota), the per-namespace ResourceQuota,
+    # and the node's own capacity are what bound it.
+    borrowingLimit: {}
+    preemption:
+      # Never, on both axes: a workload in the low lane must never cause anything else to be
+      # evicted. It is the thing that gets evicted.
+      reclaimWithinCohort: Never
+      withinClusterQueue: Never
+
+# Kueue's LocalQueueDefaulting (stable since v0.17) treats a LocalQueue literally named "default"
+# as the queue for any workload in that namespace that carries no queue-name label. Pointing it
+# at the LOW ClusterQueue is the safe default: work nobody explicitly marked as urgent runs
+# opportunistically. A tenant opts into the guaranteed lane by asking for it by name.
+#
+# This is also what closes the bypass: combined with Kueue's manageJobsWithoutQueueName=true
+# (scoped to these namespaces), there is no way to create a pod here that no queue accounts for.
+defaultLocalQueue:
+  enabled: true
+  name: default
+  target: low

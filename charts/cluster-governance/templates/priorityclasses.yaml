@@ -1,0 +1,23 @@
+{{- /*
+One PriorityClass per workload class. Rendered in ascending value order for readability; the
+order in the manifest has no effect on anything.
+*/ -}}
+{{- range $key := (list "tenantWorkloadLow" "tenantWorkloadHigh" "tenantAirflow" "platformCritical") }}
+{{- $pc := index $.Values.priorityClasses $key }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ $pc.name }}
+  labels:
+    {{- include "cluster-governance.labels" $ | nindent 4 }}
+value: {{ $pc.value }}
+{{- if $pc.preemptionPolicy }}
+preemptionPolicy: {{ $pc.preemptionPolicy }}
+{{- end }}
+# Never globalDefault - see the comment in values.yaml. Defaulting is per-namespace, via the
+# Kyverno mutate rules, so a platform pod that names no class does NOT silently inherit a
+# tenant-shaped priority.
+globalDefault: false
+description: {{ $pc.description | quote }}
+{{- end }}

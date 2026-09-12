@@ -1,0 +1,44 @@
+{{- /*
+NodePort and LoadBalancer are cluster-level resources requested from inside a namespace: a
+NodePort claims a port on every node that no other tenant can then use, and a LoadBalancer
+provisions (and, off this lab, bills for) real infrastructure. Tenant traffic is in-namespace, or
+goes through the platform's own ingress.
+*/ -}}
+{{- if .Values.policy.services.denyNodePortAndLoadBalancer }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tenant-restrict-service-types
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Restrict tenant Service types
+    policies.kyverno.io/category: Multi-tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Tenants may create ClusterIP and ExternalName Services in their own namespaces, but not
+      NodePort or LoadBalancer.
+spec:
+  background: true
+  rules:
+    - name: no-nodeport-or-loadbalancer
+      match:
+        any:
+          - resources:
+              kinds:
+                - Service
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Tenant Services must not be of type NodePort or LoadBalancer - both claim
+          cluster-wide resources from inside a namespace.
+        pattern:
+          spec:
+            # =() anchor: a Service that omits `type` is a ClusterIP, which is fine, and should
+            # not be forced to say so.
+            =(type): "!NodePort & !LoadBalancer"
+{{- end }}

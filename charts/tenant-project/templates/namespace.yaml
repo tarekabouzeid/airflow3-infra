@@ -6,4 +6,32 @@ metadata:
   labels:
     {{- include "tenant-project.labels" . | nindent 4 }}
     platform.tenant-namespace: "true"
+    # NOTE: the `platform.tenant` label this namespace also needs comes from the shared
+    # tenant-project.labels helper above - it is what the ClusterQueue namespaceSelector in
+    # charts/tenant-queue matches on, i.e. what binds a namespace to a quota pool. Do not add a
+    # second copy here; duplicate YAML keys in a label block silently collapse to the last one.
+    # What the namespace is FOR. Derived from isWorkloadNamespace rather than being its own value
+    # so the two can never disagree. charts/cluster-governance's Kyverno rules key off this to
+    # tell a tenant's Airflow control plane (which must not be queued, and gets the
+    # tenant-airflow PriorityClass) from a tenant's task namespace (which must be).
+    platform.namespace-role: {{ ternary "workloads" "airflow" .Values.isWorkloadNamespace }}
+    {{- if .Values.isWorkloadNamespace }}
+    # Kueue's managedJobsNamespaceSelector matches on this. Present ONLY on workload namespaces:
+    # combined with manageJobsWithoutQueueName=true it makes every supported workload created here
+    # queue-managed whether or not it asked to be, and its absence on the Airflow namespace is
+    # what stops Kueue's `deployment`/`statefulset` integrations from suspending a tenant's
+    # scheduler and api-server while they wait for quota.
+    platform.kueue-managed: "true"
+    {{- end }}
+    {{- if .Values.podSecurity.enabled }}
+    # Pod Security Admission, applied natively by the API server with no webhook in the path.
+    # This is the floor that survives Kyverno being down; charts/cluster-governance layers the
+    # tighter `restricted` standard on top via Kyverno, where we get reports and an Audit phase.
+    pod-security.kubernetes.io/enforce: {{ .Values.podSecurity.enforce }}
+    pod-security.kubernetes.io/enforce-version: {{ .Values.podSecurity.version }}
+    pod-security.kubernetes.io/audit: {{ .Values.podSecurity.audit }}
+    pod-security.kubernetes.io/audit-version: {{ .Values.podSecurity.version }}
+    pod-security.kubernetes.io/warn: {{ .Values.podSecurity.warn }}
+    pod-security.kubernetes.io/warn-version: {{ .Values.podSecurity.version }}
+    {{- end }}
 {{- end }}

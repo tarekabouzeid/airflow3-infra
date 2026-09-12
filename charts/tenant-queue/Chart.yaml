@@ -1,0 +1,12 @@
+apiVersion: v2
+name: tenant-queue
+description: >
+  The per-tenant half of the Kueue topology for ONE tenant on ONE workload cluster: a guaranteed
+  high-priority ClusterQueue, an opportunistic low-priority ClusterQueue that runs on borrowed
+  idle capacity, and the LocalQueues in the tenant's workload namespace that tenants actually
+  reference. Platform-owned: rendered by appset-tenant-queues from the tenant registry under
+  project "default", because ClusterQueue is cluster-scoped and a tenant AppProject deliberately
+  cannot create cluster-scoped kinds.
+type: application
+version: 0.1.0
+appVersion: "1.0"

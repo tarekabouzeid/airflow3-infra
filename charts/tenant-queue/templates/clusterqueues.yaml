@@ -1,0 +1,47 @@
+{{- /*
+Two ClusterQueues per tenant per cluster. They are structurally identical - same flavor, same
+cohort, same namespaceSelector - and differ only in their numbers and their preemption stance.
+That is the whole design: "priority" here is not a label on a workload, it is which pool of quota
+the workload is allowed to draw from and who is allowed to take it back.
+
+apiVersion v1beta2 (the storage version in Kueue 0.19.4). Note v1beta2 renamed `spec.cohort` to
+`spec.cohortName`; v1beta1's spelling is silently ignored by the v1beta2 schema rather than
+rejected, which would leave the queue in its own cohort of one and quietly disable all borrowing.
+*/ -}}
+{{- range $lane := (list "high" "low") }}
+{{- $q := index $.Values.queues $lane }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: {{ $.Values.tenant }}-{{ $lane }}
+  labels:
+    {{- include "tenant-queue.labels" $ | nindent 4 }}
+    platform.queue-lane: {{ $lane }}
+spec:
+  cohortName: {{ $.Values.cohortName }}
+  # Only this tenant's own namespaces may submit to this queue. Redundant with the AppProject and
+  # with RBAC - a tenant has no way to create a workload in another tenant's namespace to begin
+  # with - but it means the quota boundary is stated on the quota object itself, where someone
+  # reading the ClusterQueue can see it.
+  namespaceSelector:
+    matchLabels:
+      platform.tenant: {{ $.Values.tenant }}
+  # BestEffortFIFO (Kueue's default): a workload at the head of the queue that does not currently
+  # fit does not block smaller ones behind it. StrictFIFO is the alternative and trades utilisation
+  # for strict submission ordering - worth revisiting if a large workload is ever seen starving,
+  # but head-of-line blocking on a lab this size costs more than it buys.
+  queueingStrategy: BestEffortFIFO
+  resourceGroups:
+    {{- include "tenant-queue.resourceGroups" (dict "quota" $q.nominalQuota "borrowingLimit" $q.borrowingLimit "flavor" $.Values.flavorName) | nindent 4 }}
+  preemption:
+    reclaimWithinCohort: {{ $q.preemption.reclaimWithinCohort }}
+    withinClusterQueue: {{ $q.preemption.withinClusterQueue }}
+    {{- with $q.preemption.borrowWithinCohort }}
+    borrowWithinCohort:
+      policy: {{ .policy }}
+      {{- if hasKey . "maxPriorityThreshold" }}
+      maxPriorityThreshold: {{ .maxPriorityThreshold }}
+      {{- end }}
+    {{- end }}
+{{- end }}

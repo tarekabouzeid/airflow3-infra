@@ -1,0 +1,12 @@
+apiVersion: v2
+name: cluster-governance
+description: >
+  Cluster-scoped, platform-owned governance for ONE workload cluster: the scheduling
+  PriorityClasses that keep platform components ahead of tenant work, the Kueue
+  ResourceFlavor + Cohort that every tenant ClusterQueue hangs off, and the Kyverno
+  ClusterPolicy set that constrains what tenant pods may ask the cluster for.
+  Deployed once per workload cluster by a platform Application (project: default) -
+  tenants never sync this chart and their AppProject cannot create any kind it renders.
+type: application
+version: 0.1.0
+appVersion: "1.0"

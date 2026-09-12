@@ -1,0 +1,77 @@
+{{- /*
+Where tenant pods may pull images from, and the requirement that the reference be pinned.
+
+`pattern` rather than `deny`+conditions deliberately: a pattern needs no JMESPath, so nothing in
+this file collides with Helm's own {{ }} delimiters, and Kyverno can evaluate it during a
+BACKGROUND scan as well as at admission - which is what makes the Audit phase report on pods that
+are already running, not only on the next one created.
+
+Kyverno list-pattern semantics: a single-element list pattern is applied to EVERY element of the
+list, so the one `- image:` entry below constrains every container in the pod.
+*/ -}}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tenant-restrict-image-registries
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Restrict tenant image registries
+    policies.kyverno.io/category: Supply chain
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Tenant workloads may only run images from registries the platform controls or has vetted.
+      Anything else is an unreviewed binary running with a tenant's credentials inside the
+      cluster.
+spec:
+  background: true
+  rules:
+    - name: allowed-registries
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Image is not from an allowed registry. Allowed: {{ join ", " .Values.policy.images.allowed }}.
+          Add a registry to charts/cluster-governance/values.yaml (policy.images.allowed) - which is
+          platform-owned - rather than working around this.
+        pattern:
+          spec:
+            =(ephemeralContainers):
+              - image: {{ join " | " .Values.policy.images.allowed | quote }}
+            =(initContainers):
+              - image: {{ join " | " .Values.policy.images.allowed | quote }}
+            containers:
+              - image: {{ join " | " .Values.policy.images.allowed | quote }}
+{{- if .Values.policy.images.requireExplicitTag }}
+    - name: require-explicit-image-tag
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Image must carry an explicit, non-":latest" tag or a digest (repo rule 7). An image
+          reference with no tag resolves to ":latest", so both spellings are rejected here.
+        pattern:
+          spec:
+            =(ephemeralContainers):
+              - image: "!*:latest"
+            =(initContainers):
+              - image: "!*:latest"
+            containers:
+              - image: "!*:latest"
+{{- end }}

@@ -1,0 +1,68 @@
+{{- /*
+What a single tenant container may ask the cluster for.
+
+This is the rule the namespace ResourceQuota cannot express. A ResourceQuota caps a tenant's
+TOTAL across the namespace; one pod asking for the entire quota satisfies it perfectly and
+starves every other task the same tenant is running. Capping the individual ask is what keeps a
+namespace's quota divisible.
+
+The LimitRange in charts/tenant-project already supplies defaults for a container that states
+nothing, so the "must be present" half of this rule only ever fires on a pod that explicitly set
+one side and not the other - which the LimitRange does not fix up.
+*/ -}}
+{{- if .Values.policy.resources.require }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: tenant-container-resource-bounds
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: Bound tenant container resources
+    policies.kyverno.io/category: Multi-tenancy
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Every tenant container must declare CPU and memory requests and limits, and no single
+      container may exceed the per-container ceiling. Requests are what the scheduler places on
+      and what Kueue sizes a Workload by - a container with no request is one Kueue believes is
+      free.
+spec:
+  background: true
+  rules:
+    - name: bounded-requests-and-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                {{- include "cluster-governance.tenantNamespaceSelector" . | nindent 16 }}
+      exclude:
+        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
+      validate:
+        failureAction: {{ .Values.policy.action }}
+        message: >-
+          Every container must set cpu/memory requests and limits, and no container may exceed
+          cpu {{ .Values.policy.resources.maxContainer.cpu }} /
+          memory {{ .Values.policy.resources.maxContainer.memory }}. Need more than that for one
+          container? That is a platform conversation (the ceiling lives in
+          charts/cluster-governance/values.yaml), not something to split across pods to evade.
+        pattern:
+          spec:
+            =(initContainers):
+              - resources:
+                  requests:
+                    cpu: "<={{ .Values.policy.resources.maxContainer.cpu }}"
+                    memory: "<={{ .Values.policy.resources.maxContainer.memory }}"
+                  limits:
+                    cpu: "<={{ .Values.policy.resources.maxContainer.cpu }}"
+                    memory: "<={{ .Values.policy.resources.maxContainer.memory }}"
+            containers:
+              - resources:
+                  requests:
+                    cpu: "<={{ .Values.policy.resources.maxContainer.cpu }}"
+                    memory: "<={{ .Values.policy.resources.maxContainer.memory }}"
+                  limits:
+                    cpu: "<={{ .Values.policy.resources.maxContainer.cpu }}"
+                    memory: "<={{ .Values.policy.resources.maxContainer.memory }}"
+{{- end }}

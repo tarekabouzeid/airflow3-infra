@@ -1,0 +1,63 @@
+{{- /*
+The cluster-wide half of the Kueue topology: the single ResourceFlavor every quota is expressed
+in, and the Cohort that every tenant ClusterQueue joins. The per-tenant half (ClusterQueue x2 +
+LocalQueues) is charts/tenant-queue, rendered once per (tenant, cluster) from the platform
+registry - deliberately a separate chart so that adding a tenant never edits this file.
+
+apiVersion is v1beta2: v1beta1 is still served by Kueue 0.19.4 but is marked deprecated, and
+v1beta2 is the storage version (confirmed against the CRDs shipped in the pinned chart). Note
+that v1beta2 renamed ClusterQueue's `spec.cohort` to `spec.cohortName` - charts/tenant-queue
+uses the new spelling.
+*/ -}}
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: {{ .Values.kueue.flavor.name }}
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+{{- if or .Values.kueue.flavor.nodeLabels .Values.kueue.flavor.nodeTaints }}
+spec:
+  {{- with .Values.kueue.flavor.nodeLabels }}
+  nodeLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.kueue.flavor.nodeTaints }}
+  nodeTaints:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- else }}
+# No node labels or taints on a single-node, homogeneous KIND cluster: every pod is eligible for
+# the one flavor. Rendered as an explicit empty object rather than an empty `spec:` key - a bare
+# `spec:` parses as null, which the ResourceFlavor CRD schema rejects ("spec: None is not of type
+# object"), so the chart would apply cleanly in `helm template` and fail against a real cluster.
+spec: {}
+{{- end }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Cohort
+metadata:
+  name: {{ .Values.kueue.cohort.name }}
+  labels:
+    {{- include "cluster-governance.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.kueue.cohort.quota }}
+  # A cohort-level ceiling caps what every member ClusterQueue can hold BETWEEN them, borrowing
+  # included - the backstop that stops the low-priority lane's borrowing from adding up to more
+  # than the cluster actually has.
+  resourceGroups:
+    - coveredResources:
+        {{- range $resource, $_ := .Values.kueue.cohort.quota }}
+        - {{ $resource }}
+        {{- end }}
+      flavors:
+        - name: {{ .Values.kueue.flavor.name }}
+          resources:
+            {{- range $resource, $quantity := .Values.kueue.cohort.quota }}
+            - name: {{ $resource }}
+              nominalQuota: {{ $quantity | quote }}
+            {{- end }}
+  {{- else }}
+  # No explicit cohort quota: the effective ceiling is the sum of the member ClusterQueues'
+  # nominalQuota. See values.yaml (kueue.cohort.quota) for when to set one.
+  resourceGroups: []
+  {{- end }}
