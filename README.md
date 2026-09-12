@@ -20,8 +20,14 @@ Kubernetes, managed by a central Argo CD**, running entirely on local KIND clust
 - **DAGs on a PVC**, populated by a loader Job that clones the tenant repo.
 - **Two lightweight integration tests per tenant** (one Spark, one KubernetesPodOperator), each
   exercised locally and remotely.
+- **Multi-tenant governance at admission time**: Kueue gives every tenant a guaranteed-quota
+  queue lane and an opportunistic one with cluster-wide gang scheduling; Kyverno bounds what a
+  tenant pod may do (image registry, resource ceilings, PriorityClass, Pod Security, node
+  pinning). Platform-owned, GitOps-deployed, tenants pick a lane and nothing else. See
+  [`docs/runbook-governance.md`](docs/runbook-governance.md).
 - **CI in GitHub Actions**: lint, policy checks, rendered-manifest diffs on PRs, a reduced
-  single-cluster KIND smoke test, and a nightly Argo CD upgrade rehearsal.
+  single-cluster KIND smoke test, a dedicated real-cluster governance smoke test, and a nightly
+  Argo CD upgrade rehearsal.
 
 ## Execution model: KubernetesExecutor, not Celery
 
@@ -51,6 +57,7 @@ Bootstrapped and run end to end on a real local 3-cluster lab (not just CI).
 | Tenant A / B Airflow (api-server, scheduler, dag-processor, triggerer, postgres) | Healthy, both clusters |
 | `it_kubernetes_pod_operator` (local + cross-cluster) | Passing, both tenants |
 | `it_spark` (local + cross-cluster) | Bugs fixed, each fix verified directly; `make test-integration` can still be disrupted - see below |
+| Kueue + Kyverno governance | Verified on a real KIND cluster (`.github/workflows/governance-kind.yaml`): registry/priority rejections, quota-gated admission, queue-lane-driven priority all confirmed against a live API server. Ships `policy.action: Audit`; see `make governance-enforce` before flipping to `Enforce`. |
 
 **Open issue:** `tenant-a-airflow`/`tenant-b-airflow` sit persistently `OutOfSync` with
 `selfHeal: true`, so Argo CD periodically re-syncs them, regenerating hook-created Secrets and
@@ -119,7 +126,9 @@ Forwarding just one tenant on a specific port also still works directly:
 **To run the full 3-cluster lab locally:** [`docs/runbook-bootstrap.md`](docs/runbook-bootstrap.md).
 **To rehearse an Argo CD upgrade:** [`docs/runbook-argocd-upgrade.md`](docs/runbook-argocd-upgrade.md).
 **To onboard a new tenant:** [`docs/runbook-tenant-onboarding.md`](docs/runbook-tenant-onboarding.md).
-**To change a quota, a queue lane or a policy rule:** [`docs/runbook-governance.md`](docs/runbook-governance.md).
+**To change a quota, a queue lane or a policy rule, or to check current governance status /
+roll out Enforce:** `make governance-status`, `make governance-report`, `make governance-enforce`,
+and [`docs/runbook-governance.md`](docs/runbook-governance.md).
 **Something not working:** [`docs/troubleshooting.md`](docs/troubleshooting.md).
 **To take this off KIND onto real infra (VKS 9 + AWS EKS, MinIO):** [`docs/HYBRID_MIGRATION_PLAN.md`](docs/HYBRID_MIGRATION_PLAN.md).
 

@@ -13,7 +13,8 @@ PORT ?= 8081
         bootstrap install-argocd vault-init vault-configure remote-access \
         seed-tenant-secrets seed-headlamp-kubeconfigs seed-object-store status test-integration \
         upgrade-argocd ui-argocd ui-airflow ui-headlamp ui-vault ui-seaweedfs port-forward \
-        port-forward-stop lint teardown images
+        port-forward-stop lint teardown images \
+        governance-status governance-report governance-enforce
 
 help:
 	@echo "Common targets:"
@@ -33,6 +34,9 @@ help:
 	@echo "  make port-forward-stop  - stop them"
 	@echo "  make upgrade-argocd VERSION=<chart-version> - bump Argo CD via GitOps"
 	@echo "  make lint               - helm lint/template + kubeconform + policy checks"
+	@echo "  make governance-status  - ClusterQueues/LocalQueues/Workloads + ClusterPolicy readiness, both workload clusters"
+	@echo "  make governance-report  - tenant PolicyReport failures, both workload clusters (what Enforce would reject)"
+	@echo "  make governance-enforce - reminder of the safe Audit -> Enforce sequence (see docs/runbook-governance.md)"
 	@echo "  make teardown           - delete all 3 kind clusters"
 
 preflight:
@@ -126,3 +130,44 @@ lint:
 
 teardown-clusters teardown:
 	bash scripts/99-teardown.sh
+
+# --- governance (Kueue + Kyverno) -------------------------------------------------------------
+# Day-2 operation only - installing/upgrading Kueue and Kyverno themselves is GitOps
+# (platform/bootstrap/kueue-*.yaml, kyverno-*.yaml), never done from here. See
+# docs/runbook-governance.md for what each of these is actually checking and why.
+WORKLOAD_CLUSTERS := af-work-a af-work-b
+
+governance-status:
+	@for c in $(WORKLOAD_CLUSTERS); do \
+		echo "== $$c: Kueue topology =="; \
+		kubectl --context kind-$$c get resourceflavor,cohort,clusterqueue,workloadpriorityclass -o wide 2>/dev/null || true; \
+		echo "== $$c: ClusterPolicy readiness (kyverno) =="; \
+		kubectl --context kind-$$c get clusterpolicy -o wide 2>/dev/null || true; \
+		echo "== $$c: per-tenant LocalQueues + pending/admitted Workloads =="; \
+		for ns in $$(kubectl --context kind-$$c get ns -l platform.kueue-managed=true -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do \
+			echo "--- $$ns ---"; \
+			kubectl --context kind-$$c -n $$ns get localqueue -o wide 2>/dev/null || true; \
+			kubectl --context kind-$$c -n $$ns get workloads.kueue.x-k8s.io -o wide 2>/dev/null || true; \
+		done; \
+	done
+
+governance-report:
+	@echo "Rows below are what Enforce would reject right now - see docs/runbook-governance.md"
+	@echo "(\"Rolling out: Audit -> Enforce\") before flipping charts/cluster-governance/values.yaml."
+	@for c in $(WORKLOAD_CLUSTERS); do \
+		echo "== $$c =="; \
+		kubectl --context kind-$$c get policyreport -A -o json 2>/dev/null \
+			| jq -r '.items[].results[]? | select(.result=="fail") | "\(.policy)/\(.rule)  \(.resources[0].namespace)/\(.resources[0].name)"' \
+			| sort | uniq -c | sort -rn || true; \
+	done
+
+governance-enforce:
+	@echo "1. make governance-report  - confirm it is empty on BOTH workload clusters (background scan"
+	@echo "   already covers pods that are running now, not just new ones)."
+	@echo "2. Run a full Airflow + Spark cycle for both tenants (make test-integration) and re-check."
+	@echo "3. Set policy.action: Enforce in charts/cluster-governance/values.yaml, commit, push, let"
+	@echo "   Argo CD sync cluster-governance-af-work-a/b."
+	@echo "4. make governance-status  - confirm every ClusterPolicy is still Ready on both clusters."
+	@echo "See docs/runbook-governance.md, \"Rolling out: Audit -> Enforce\", for the full reasoning -"
+	@echo "including why this order (never Enforce first)."
+
