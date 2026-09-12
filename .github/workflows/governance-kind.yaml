@@ -87,6 +87,19 @@ jobs:
             -f /tmp/kueue-values.yaml \
             --wait --timeout 6m
           kubectl -n kueue-system rollout status deploy/kueue-controller-manager --timeout=5m
+          # Kueue registers visibility.kueue.x-k8s.io as an AGGREGATED APIService. Until that is
+          # Available, any unqualified `kubectl get <shortname>` has to sweep full discovery, hits
+          # the unready aggregated API, and fails outright with "unable to retrieve the complete
+          # list of server APIs" - which looks nothing like a Kueue problem and happens instantly.
+          # Wait for it here so later assertions fail for real reasons only.
+          for apiservice in $(kubectl get apiservice -o name | grep visibility.kueue || true); do
+            echo "waiting for ${apiservice} to become Available..."
+            kubectl wait "${apiservice}" --for=condition=Available --timeout=180s || {
+              echo "::warning::${apiservice} never became Available; discovery-dependent commands may be unreliable"
+              kubectl get apiservice -o wide | grep visibility.kueue || true
+            }
+          done
+          kubectl api-resources --api-group=kueue.x-k8s.io
 
       - name: install Kyverno
         run: |
@@ -245,15 +258,18 @@ jobs:
                   capabilities: {drop: ["ALL"]}
                   seccompProfile: {type: RuntimeDefault}
           EOF
+          echo "--- pod as admitted (after mutation) ---"
+          kubectl -n "${TENANT_NS}" get pod admitted-task \
+            -o custom-columns='NAME:.metadata.name,PRIORITY:.spec.priorityClassName,GATES:.spec.schedulingGates[*].name,PHASE:.status.phase'
           # Kueue creates a Workload object for the pod - its existence IS the proof that the pod
           # went through quota admission rather than straight to the scheduler.
           for i in $(seq 1 30); do
-            count=$(kubectl -n "${TENANT_NS}" get workloads -o json | jq '.items | length')
+            count=$(kubectl -n "${TENANT_NS}" get workloads.kueue.x-k8s.io -o json | jq '.items | length')
             [ "${count}" -gt 0 ] && break
             sleep 2
           done
-          kubectl -n "${TENANT_NS}" get workloads -o wide
-          [ "$(kubectl -n "${TENANT_NS}" get workloads -o json | jq '.items | length')" -gt 0 ] || {
+          kubectl -n "${TENANT_NS}" get workloads.kueue.x-k8s.io -o wide
+          [ "$(kubectl -n "${TENANT_NS}" get workloads.kueue.x-k8s.io -o json | jq '.items | length')" -gt 0 ] || {
             echo "::error::No Workload was created for the pod - Kueue is not managing this namespace."
             exit 1
           }
@@ -263,10 +279,44 @@ jobs:
       - name: 'Kueue: the mutate rule defaulted the PriorityClass'
         run: |
           set -euo pipefail
+          # admitted-task carries kueue.x-k8s.io/queue-name: high and names NO PriorityClass, so
+          # the lane is the only input the platform has. Asserting "high" here is the real check:
+          # the earlier version of this step expected tenant-workload-low, which was correct only
+          # while the rule ignored the lane - exactly the lane/priority mismatch the rule exists
+          # to prevent.
           actual=$(kubectl -n "${TENANT_NS}" get pod admitted-task -o jsonpath='{.spec.priorityClassName}')
-          echo "admitted-task priorityClassName=${actual}"
-          [ "${actual}" = "tenant-workload-low" ] || {
-            echo "::error::Expected the mutate rule to default tenant-workload-low, got '${actual}'."
+          echo "admitted-task (queue-name: high) priorityClassName=${actual}"
+          [ "${actual}" = "tenant-workload-high" ] || {
+            echo "::error::Expected the high lane to yield tenant-workload-high, got '${actual}'."
+            exit 1
+          }
+
+          # And the other half of the pair: no queue label at all must fall to the low lane.
+          kubectl -n "${TENANT_NS}" apply -f - <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: unlabelled-task
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: c
+                image: alpine/git:2.45.2
+                command: ["sh", "-c", "sleep 5"]
+                resources:
+                  requests: {cpu: 50m, memory: 32Mi}
+                  limits: {cpu: 100m, memory: 64Mi}
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  capabilities: {drop: ["ALL"]}
+                  seccompProfile: {type: RuntimeDefault}
+          EOF
+          unlabelled=$(kubectl -n "${TENANT_NS}" get pod unlabelled-task -o jsonpath='{.spec.priorityClassName}')
+          echo "unlabelled-task priorityClassName=${unlabelled}"
+          [ "${unlabelled}" = "tenant-workload-low" ] || {
+            echo "::error::Expected an unlabelled pod to default to tenant-workload-low, got '${unlabelled}'."
             exit 1
           }
 
@@ -302,7 +352,7 @@ jobs:
           phase=$(kubectl -n "${TENANT_NS}" get pod over-quota-task -o jsonpath='{.status.phase}')
           gates=$(kubectl -n "${TENANT_NS}" get pod over-quota-task -o jsonpath='{.spec.schedulingGates[*].name}')
           echo "over-quota-task phase=${phase} schedulingGates=[${gates}]"
-          kubectl -n "${TENANT_NS}" get workloads -o wide
+          kubectl -n "${TENANT_NS}" get workloads.kueue.x-k8s.io -o wide
           if [ "${phase}" = "Running" ] || [ "${phase}" = "Succeeded" ]; then
             echo "::error::A pod exceeding the ClusterQueue quota ran anyway - Kueue admission is not binding."
             exit 1
@@ -320,8 +370,8 @@ jobs:
           echo "::group::policies"; kubectl get clusterpolicy -o wide || true; echo "::endgroup::"
           echo "::group::policy reports"; kubectl -n "${TENANT_NS}" get policyreport -o yaml || true; echo "::endgroup::"
           echo "::group::queues"; kubectl get clusterqueue,resourceflavor,cohort -o wide || true; echo "::endgroup::"
-          echo "::group::workloads"; kubectl -n "${TENANT_NS}" get workloads -o yaml || true; echo "::endgroup::"
+          echo "::group::workloads"; kubectl -n "${TENANT_NS}" get workloads.kueue.x-k8s.io -o yaml || true; echo "::endgroup::"
           echo "::group::pods"; kubectl -n "${TENANT_NS}" get pods -o wide || true; echo "::endgroup::"
           echo "::group::namespace"; kubectl get ns "${TENANT_NS}" -o yaml || true; echo "::endgroup::"
-          echo "::group::kueue logs"; kubectl -n kueue-system logs deploy/kueue-controller-manager --tail=200 || true; echo "::endgroup::"
-          echo "::group::kyverno logs"; kubectl -n kyverno logs deploy/kyverno-admission-controller --tail=200 || true; echo "::endgroup::"
+          echo "::group::kueue logs"; kubectl -n kueue-system logs deploy/kueue-controller-manager --tail=40 || true; echo "::endgroup::"
+          echo "::group::kyverno logs"; kubectl -n kyverno logs deploy/kyverno-admission-controller --tail=40 || true; echo "::endgroup::"
