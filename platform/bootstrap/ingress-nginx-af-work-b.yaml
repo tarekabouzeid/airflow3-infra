@@ -1,0 +1,79 @@
+# ingress-nginx: KIND-native Ingress controller for af-work-b.
+#
+# Mirrors ingress-nginx-af-work-a.yaml exactly; see that file for the full rationale.
+#
+# KIND port wiring (kind/af-work-b.yaml):
+#   containerPort 80 → hostPort 8081
+# Notebook pods spawned in af-work-b are reachable at http://localhost:8081/user/<username>/.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress-nginx-af-work-b
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes.github.io/ingress-nginx
+    chart: ingress-nginx
+    targetRevision: "4.11.3"   # see versions.env (INGRESS_NGINX_CHART_VERSION)
+    helm:
+      values: |
+        controller:
+          kind: DaemonSet
+          image:
+            registry: registry.k8s.io
+            image: ingress-nginx/controller
+            tag: "v1.11.3"
+            pullPolicy: IfNotPresent
+          ingressClassResource:
+            name: contour
+            enabled: true
+            default: false
+            controllerValue: "k8s.io/ingress-nginx"
+          ingressClass: contour
+          hostPort:
+            enabled: true
+            ports:
+              http: 80
+              https: 443
+          service:
+            type: ClusterIP
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              effect: NoSchedule
+          admissionWebhooks:
+            enabled: false
+          config:
+            proxy-read-timeout: "3600"
+            proxy-send-timeout: "3600"
+            proxy-connect-timeout: "300"
+            proxy-body-size: "128m"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+        defaultBackend:
+          enabled: false
+  destination:
+    server: https://af-work-b-control-plane:6443
+    namespace: ingress-nginx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 2m

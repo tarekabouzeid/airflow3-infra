@@ -1,0 +1,101 @@
+# ingress-nginx: KIND-native Ingress controller for af-work-a.
+#
+# Why ingress-nginx instead of Contour (which jupyterhub-multicluster-kubespawner hardcodes):
+# ingress-nginx is lighter, has a well-understood KIND setup, and can respond to any IngressClass
+# name. By registering it with IngressClass "contour" here, the spawner's hardcoded
+# `ingressClassName: contour` on every per-user Ingress is satisfied without installing Contour.
+#
+# KIND port wiring (kind/af-work-a.yaml):
+#   containerPort 80 → hostPort 8080
+# The DaemonSet binds hostPort 80 on the control-plane node; KIND's extraPortMapping routes
+# host :8080 → node :80 → ingress-nginx. Notebook pods in af-work-a are therefore reachable at
+# http://localhost:8080/user/<username>/ from a browser on the Docker host.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ingress-nginx-af-work-a
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    # Wave 1 with the other operators. JupyterHub (wave 2) depends on ingress-nginx being
+    # ready before its hub pod starts — the spawner will try to create Ingress objects in the
+    # same cluster on first notebook spawn.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://kubernetes.github.io/ingress-nginx
+    chart: ingress-nginx
+    targetRevision: "4.11.3"   # controller v1.11.3 - see versions.env (INGRESS_NGINX_CHART_VERSION)
+    helm:
+      values: |
+        controller:
+          kind: DaemonSet
+          image:
+            registry: registry.k8s.io
+            image: ingress-nginx/controller
+            tag: "v1.11.3"   # see versions.env (INGRESS_NGINX_IMAGE_TAG)
+            pullPolicy: IfNotPresent
+          # Register this controller under the IngressClass name "contour" instead of the
+          # default "nginx". jupyterhub-multicluster-kubespawner hardcodes ingressClassName:
+          # contour in every Ingress it creates; this makes ingress-nginx own that class so
+          # those Ingresses are actually processed.
+          ingressClassResource:
+            name: contour
+            enabled: true
+            default: false
+            controllerValue: "k8s.io/ingress-nginx"
+          ingressClass: contour
+          # DaemonSet hostPort binding: the pod binds port 80 as a host port on whatever node
+          # it lands on. KIND's extraPortMapping (kind/af-work-a.yaml) then routes
+          # host :8080 → node :80 → this pod. No LoadBalancer or MetalLB needed.
+          hostPort:
+            enabled: true
+            ports:
+              http: 80
+              https: 443
+          service:
+            type: ClusterIP   # not needed with hostPort, avoids external-IP pending state
+          # The single KIND node is a control-plane node and carries the NoSchedule taint.
+          # Without this toleration the DaemonSet pod never schedules in a single-node KIND
+          # cluster.
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              effect: NoSchedule
+          # Disable the admission webhook for simplicity in the lab: it requires a valid TLS
+          # cert, adds an extra init round-trip, and gives nothing over static YAML validation.
+          admissionWebhooks:
+            enabled: false
+          config:
+            # Generous timeouts for notebook WebSocket connections (JupyterLab uses long-lived
+            # WebSockets for the terminal and kernel comms).
+            proxy-read-timeout: "3600"
+            proxy-send-timeout: "3600"
+            proxy-connect-timeout: "300"
+            proxy-body-size: "128m"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+        defaultBackend:
+          enabled: false
+  destination:
+    server: https://af-work-a-control-plane:6443
+    namespace: ingress-nginx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 2m

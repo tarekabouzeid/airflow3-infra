@@ -1,0 +1,196 @@
+# JupyterHub: shared notebook hub for both tenants, resident in af-work-a.
+#
+# Architecture
+# ───────────────────────────────────────────────────────────────────────────
+# Hub pod        → af-work-a / namespace: jupyterhub
+# Notebook pods  → af-work-a (http://localhost:8080/user/<name>/)
+#                  af-work-b (http://localhost:8081/user/<name>/)
+#
+# Cross-cluster spawn uses jupyterhub-multicluster-kubespawner v0.2 (baked into
+# images/jupyterhub/Dockerfile). The spawner invokes `kubectl --context <name>` to create a
+# per-user Namespace/SA/Pod/Service/Ingress in whichever cluster the user chooses from the
+# profile list. ingress-nginx (platform/bootstrap/ingress-nginx-af-work-{a,b}.yaml) owns the
+# IngressClass "contour" in each cluster, satisfying the spawner's hardcoded class name.
+#
+# Authentication
+# ───────────────────────────────────────────────────────────────────────────
+# DummyAuthenticator with a shared password stored in Vault at secret/jupyterhub/auth and
+# fetched by the Secret named jupyterhub-auth-env (created by scripts/85-jupyterhub-setup.sh).
+# Username = any string; password = shared secret. For the lab only — replace with OAuth in
+# production.
+#
+# Pre-requisites (manual, before first sync)
+# ───────────────────────────────────────────────────────────────────────────
+# 1. Build and push the custom hub image:
+#      docker build -t localhost:5001/jupyterhub:3.3.8 images/jupyterhub/
+#      docker push localhost:5001/jupyterhub:3.3.8
+#    (scripts/85-jupyterhub-setup.sh does both)
+# 2. Run scripts/85-jupyterhub-setup.sh to create the two required Secrets in af-work-a:
+#      jupyterhub-multicluster-kubeconfig  — kubeconfig with SA tokens for both clusters
+#      jupyterhub-auth-env                 — DummyAuthenticator password from Vault
+# 3. Trigger sync: argocd app sync jupyterhub-af-work-a
+#
+# syncPolicy is NOT automated here to make that dependency explicit.
+# Run `make jupyterhub-sync` after the setup script succeeds.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: jupyterhub-af-work-a
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    # Wave 2: after ingress-nginx (wave 1, which creates the IngressClass the spawner needs)
+    # and after cluster-governance (wave 2 applies alongside, but ingress-nginx is the real dep).
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://hub.jupyter.org/helm-chart/
+    chart: jupyterhub
+    targetRevision: "3.3.8"   # JupyterHub 4.1.x — see versions.env (JUPYTERHUB_CHART_VERSION)
+    helm:
+      values: |
+        hub:
+          image:
+            # Custom image: quay.io/jupyterhub/k8s-hub:3.3.8 + kubectl + multicluster spawner.
+            # Built by scripts/85-jupyterhub-setup.sh and pushed to the lab registry.
+            name: localhost:5001/jupyterhub
+            tag: "3.3.8"   # see versions.env (JUPYTERHUB_HUB_IMAGE_TAG)
+            pullPolicy: IfNotPresent
+
+          # Hub config written to jupyterhub_config.py.
+          config:
+            JupyterHub:
+              authenticator_class: dummy
+
+          # Python extraConfig is eval'd AFTER hub.config, so it can reference the password env
+          # var that hub.config cannot (config values are YAML strings, not Python expressions).
+          extraConfig:
+            00-multicluster-spawner: |
+              import os
+              from multicluster_kubespawner import MultiClusterKubeSpawner
+              c.JupyterHub.spawner_class = MultiClusterKubeSpawner
+
+              # Password comes from the jupyterhub-auth-env Secret (never committed to git).
+              c.DummyAuthenticator.password = os.environ.get("JUPYTERHUB_DUMMY_PASSWORD", "")
+
+              # Profile list: each entry maps a user's profile choice to a target cluster
+              # context (in the mounted kubeconfig) and the public Ingress base URL that
+              # JupyterHub redirects the user's browser to after spawn.
+              # Context names must match the `name:` fields in jupyterhub-multicluster-kubeconfig.
+              c.MultiClusterKubeSpawner.profile_list = [
+                {
+                  "display_name": "Cluster A — af-work-a (default)",
+                  "default": True,
+                  "spawner_override": {
+                    "kubernetes_context": "af-work-a",
+                    "ingress_public_url": "http://localhost:8080",
+                  },
+                },
+                {
+                  "display_name": "Cluster B — af-work-b",
+                  "spawner_override": {
+                    "kubernetes_context": "af-work-b",
+                    "ingress_public_url": "http://localhost:8081",
+                  },
+                },
+              ]
+
+          # Combined kubeconfig with SA tokens for af-work-a and af-work-b. Context names
+          # match the profile_list entries above. Created by scripts/85-jupyterhub-setup.sh.
+          extraVolumes:
+            - name: multicluster-kubeconfig
+              secret:
+                secretName: jupyterhub-multicluster-kubeconfig
+          extraVolumeMounts:
+            - name: multicluster-kubeconfig
+              mountPath: /etc/jupyterhub/kubeconfig
+              readOnly: true
+
+          # DummyAuthenticator password comes from a Secret the setup script creates.
+          # NEVER put the actual password in this file.
+          # KUBECONFIG env var points kubectl to the mounted kubeconfig above.
+          extraEnv:
+            - name: JUPYTERHUB_DUMMY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jupyterhub-auth-env
+                  key: password
+            - name: KUBECONFIG
+              value: /etc/jupyterhub/kubeconfig/config
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+
+        # JupyterHub's built-in configurable-http-proxy.
+        # NodePort 30888 → host port 8888 via kind/af-work-a.yaml extraPortMappings.
+        # Hub UI: http://localhost:8888
+        proxy:
+          service:
+            type: NodePort
+            nodePorts:
+              http: 30888
+
+        # Single-user notebook server image used by the spawner for the Pod spec.
+        # The multicluster spawner builds its own Pod manifest via kubectl; this value is
+        # referenced in the spawner's pod template. Pinned — no :latest (repo rule 7).
+        singleuser:
+          image:
+            name: quay.io/jupyter/base-notebook
+            tag: "2024-11-11"   # see versions.env (JUPYTERHUB_SINGLEUSER_IMAGE_TAG)
+            pullPolicy: IfNotPresent
+          # Notebook namespaces are created dynamically by the spawner (not this chart). The
+          # spawner does not use these storage settings, but z2jh requires the key to be valid.
+          storage:
+            type: none
+          # Generous defaults so notebooks can run typical data-science workloads; admin can
+          # narrow these via the Kyverno resource ceiling in cluster-governance.
+          memory:
+            limit: 4G
+            guarantee: 1G
+          cpu:
+            limit: 2.0
+            guarantee: 0.25
+
+        # Disable the pre-puller: its DaemonSet pre-pulls the singleuser image onto every node.
+        # With single-node KIND clusters this would work but wastes time on cluster creation.
+        prePuller:
+          hook:
+            enabled: false
+          continuous:
+            enabled: false
+
+        # Disable scheduling:
+        # - userScheduler: extra scheduler for bin-packing users; overkill for a 1-node lab.
+        # - podDisruptionBudget: breaks on single-node (not enough replicas to maintain PDB).
+        scheduling:
+          userScheduler:
+            enabled: false
+          podDisruptionBudget:
+            enabled: false
+
+        # Disable service-account token automounting on the hub pod — the spawner uses the
+        # explicit kubeconfig mounted above, not the in-cluster service account.
+        rbac:
+          enabled: true   # still needed for z2jh's own RBAC
+
+  destination:
+    server: https://af-work-a-control-plane:6443
+    namespace: jupyterhub
+  # No automated sync: the two prerequisite Secrets must exist before the hub pod starts,
+  # otherwise the volume mounts fail and the pod crash-loops. Run scripts/85-jupyterhub-setup.sh
+  # then `make jupyterhub-sync` (or `argocd app sync jupyterhub-af-work-a`).
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 2m

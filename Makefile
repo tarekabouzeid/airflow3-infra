@@ -171,3 +171,36 @@ governance-enforce:
 	@echo "See docs/runbook-governance.md, \"Rolling out: Audit -> Enforce\", for the full reasoning -"
 	@echo "including why this order (never Enforce first)."
 
+
+# ── JupyterHub ─────────────────────────────────────────────────────────────────────────────────
+# Cross-cluster notebook hub in af-work-a. Notebooks can spawn in af-work-a or af-work-b.
+# See docs/runbook-jupyterhub.md and platform/bootstrap/jupyterhub-af-work-a.yaml.
+
+jupyterhub-setup:
+	@echo "Building hub image, minting SA tokens, writing kubeconfig + auth Secrets..."
+	bash scripts/85-jupyterhub-setup.sh
+
+jupyterhub-sync:
+	@echo "Triggering Argo CD sync for JupyterHub (pre-requisite Secrets must exist first)..."
+	argocd app sync jupyterhub-af-work-a --timeout 120
+
+jupyterhub-status:
+	@echo "=== Hub pod ==="
+	kubectl --context kind-af-work-a -n jupyterhub get pods -o wide 2>/dev/null || true
+	@echo "=== Hub service / NodePort ==="
+	kubectl --context kind-af-work-a -n jupyterhub get svc 2>/dev/null || true
+	@echo "=== Active notebook sessions (jupyter-* namespaces, af-work-a) ==="
+	kubectl --context kind-af-work-a get ns -o name 2>/dev/null | grep jupyter- || echo "(none)"
+	@echo "=== Active notebook sessions (jupyter-* namespaces, af-work-b) ==="
+	kubectl --context kind-af-work-b get ns -o name 2>/dev/null | grep jupyter- || echo "(none)"
+	@echo "=== ingress-nginx DaemonSet (af-work-a) ==="
+	kubectl --context kind-af-work-a -n ingress-nginx get daemonset 2>/dev/null || true
+	@echo "=== ingress-nginx DaemonSet (af-work-b) ==="
+	kubectl --context kind-af-work-b -n ingress-nginx get daemonset 2>/dev/null || true
+
+jupyterhub-logs:
+	kubectl --context kind-af-work-a -n jupyterhub logs deployment/hub --tail=100 -f
+
+jupyterhub-token-rotate:
+	@echo "Re-running setup script to rotate SA tokens and refresh kubeconfig Secret..."
+	bash scripts/85-jupyterhub-setup.sh

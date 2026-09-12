@@ -70,6 +70,12 @@ spec:
             - external-secrets
             - spark-operator
             - seaweedfs
+            # ingress-nginx and jupyterhub are platform namespaces: neither carries the
+            # platform.tenant-namespace label so ClusterPolicies wouldn't match them anyway,
+            # but engine-level exclusion avoids the evaluation overhead and any future
+            # labelling accident.
+            - ingress-nginx
+            - jupyterhub
   destination:
     server: https://af-work-a-control-plane:6443
     namespace: kyverno

@@ -70,6 +70,7 @@ spec:
             - external-secrets
             - spark-operator
             - seaweedfs
+            - ingress-nginx   # platform Ingress controller, not subject to tenant policies
   destination:
     server: https://af-work-b-control-plane:6443
     namespace: kyverno

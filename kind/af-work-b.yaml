@@ -8,6 +8,12 @@ name: af-work-b
 nodes:
   - role: control-plane
     image: kindest/node:v1.32.8@sha256:abd489f042d2b644e2d033f5c2d900bc707798d075e8186cb65e3f1367a9d5a1
+    extraPortMappings:
+      # ingress-nginx DaemonSet binds hostPort 80 on the node; KIND maps that to 8081 on the
+      # Docker host. Notebook pods spawned in af-work-b are reachable at http://localhost:8081.
+      - containerPort: 80
+        hostPort: 8081
+        protocol: TCP
 # Registers this node's containerd to treat localhost:5001 as a mirror for the shared local
 # registry container (scripts/20-local-registry.sh). Exact pattern from kind's own docs:
 # https://kind.sigs.k8s.io/docs/user/local-registry/
