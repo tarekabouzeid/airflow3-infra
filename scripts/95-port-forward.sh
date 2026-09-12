@@ -23,7 +23,12 @@ pid_file="${REPO_ROOT}/.local/port-forward.pids"
 stop_existing() {
   if [ -f "${pid_file}" ]; then
     while read -r pid; do
-      [ -n "${pid}" ] && kill "${pid}" 2>/dev/null || true
+      # if/fi rather than `[ -n x ] && kill || true`: shellcheck SC2015 flags that form because
+      # A && B || C is not if-then-else - C also runs when A succeeds and B fails, so the `|| true`
+      # was silently swallowing a genuine kill failure as well as the empty-pid case it was for.
+      if [ -n "${pid}" ]; then
+        kill "${pid}" 2>/dev/null || true
+      fi
     done < "${pid_file}"
     rm -f "${pid_file}"
   fi

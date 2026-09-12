@@ -50,12 +50,23 @@ spec:
             # wait. Requires Spark Operator >= 2.4.0; this platform pins 2.5.2.
             - name: SparkApplicationIntegration
               enabled: true
-        # The visibility API's auth-reader RoleBinding must live in kube-system (it binds a
-        # built-in Role that only exists there). Nothing here consumes the visibility API, and a
-        # platform Application reaching into kube-system for a feature we do not use is blast
-        # radius for nothing - so it is off. Turn it back on if pending-workload introspection
-        # via the aggregated API is ever wanted.
-        enableVisibilityAuthReaderRoleBinding: false
+        # Left at the chart default (true), and it must stay that way. The RoleBinding lives in
+        # kube-system because it binds the built-in extension-apiserver-authentication-reader
+        # Role, which only exists there, and Kueue's visibility server needs it to read
+        # configmaps/extension-apiserver-authentication.
+        #
+        # Turning it off does NOT merely disable an unused feature: VisibilityOnDemand is beta
+        # and default-ON since Kueue 0.9, so the visibility server starts regardless, fails to
+        # read that configmap, and calls os.Exit(1) (cmd/kueue/main.go) - the whole controller
+        # crashloops and every tenant workload namespace goes fail-closed with it. Confirmed in
+        # CI: setting this false timed out `helm install --wait` after six minutes with
+        # "configmaps \"extension-apiserver-authentication\" is forbidden" in the manager log.
+        #
+        # The chart's own comment allows disabling it "when deploying under a GitOps project that
+        # cannot target kube-system, THEN create the RoleBinding out-of-band" - both halves
+        # matter, and neither applies here: this Application runs under project "default", which
+        # can target kube-system perfectly well.
+        enableVisibilityAuthReaderRoleBinding: true
         managerConfig:
           controllerManagerConfigYaml: |-
             apiVersion: config.kueue.x-k8s.io/v1beta2
