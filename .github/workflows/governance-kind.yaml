@@ -144,9 +144,9 @@ jobs:
           helm template ns charts/tenant-project \
             --set scope=namespace --set tenant=tenant-ci --set namespace="${TENANT_NS}" \
             --set isWorkloadNamespace=true \
-            --set-string quota.requests\\.cpu=2 --set-string quota.requests\\.memory=2Gi \
-            --set-string quota.limits\\.cpu=4 --set-string quota.limits\\.memory=4Gi \
-            --set-string quota.pods=10 \
+            --set-string quota.requests\\.cpu=4 --set-string quota.requests\\.memory=4Gi \
+            --set-string quota.limits\\.cpu=8 --set-string quota.limits\\.memory=8Gi \
+            --set-string quota.pods=20 \
             | kubectl apply --server-side -f -
           kubectl get ns "${TENANT_NS}" --show-labels
 
@@ -355,10 +355,18 @@ jobs:
       - name: 'Kueue: work beyond the queue quota is held, not run'
         run: |
           set -euo pipefail
-          # 2 CPU against a 1 CPU ClusterQueue with borrowingLimit 0. The namespace ResourceQuota
-          # allows it (requests.cpu 2), so anything that stops this pod is Kueue and only Kueue -
-          # which is the property the whole quota design rests on.
-          kubectl -n "${TENANT_NS}" apply -f - <<'EOF'
+          # 1500m against a 1 CPU ClusterQueue with borrowingLimit 0, inside a namespace whose
+          # ResourceQuota allows 4 CPU of requests and currently has ~3.75 of them free. So the
+          # ONLY thing that can hold this pod is Kueue - which is the property the whole quota
+          # design rests on, and the reason the namespace quota is deliberately sized above the
+          # Kueue ceiling rather than at it.
+          #
+          # Getting this wrong is easy and silent: an earlier version asked for 2 CPU against a
+          # 2 CPU namespace quota that already had 250m consumed by the two pods created above,
+          # so the API server rejected it outright on ResourceQuota and the assertion "proved"
+          # Kueue was holding work it had never even seen.
+          set +e
+          oq_out=$(kubectl -n "${TENANT_NS}" apply -f - 2>&1 <<'EOF'
           apiVersion: v1
           kind: Pod
           metadata:
@@ -371,8 +379,8 @@ jobs:
                 image: alpine/git:2.45.2
                 command: ["sh", "-c", "sleep 60"]
                 resources:
-                  requests: {cpu: "2", memory: 128Mi}
-                  limits: {cpu: "2", memory: 256Mi}
+                  requests: {cpu: "1500m", memory: 128Mi}
+                  limits: {cpu: "1500m", memory: 256Mi}
                 securityContext:
                   allowPrivilegeEscalation: false
                   runAsNonRoot: true
@@ -380,6 +388,16 @@ jobs:
                   capabilities: {drop: ["ALL"]}
                   seccompProfile: {type: RuntimeDefault}
           EOF
+          )
+          oq_rc=$?
+          set -e
+          echo "kubectl apply exit=${oq_rc}"
+          echo "${oq_out}"
+          if [ "${oq_rc}" -ne 0 ]; then
+            echo "::error::The over-quota pod was REJECTED at admission rather than held by Kueue. A rejection here means something other than Kueue is binding - most likely the namespace ResourceQuota - so this assertion would prove nothing about queueing."
+            kubectl -n "${TENANT_NS}" describe resourcequota || true
+            exit 1
+          fi
           sleep 45
           phase=$(kubectl -n "${TENANT_NS}" get pod over-quota-task -o jsonpath='{.status.phase}')
           gates=$(kubectl -n "${TENANT_NS}" get pod over-quota-task -o jsonpath='{.spec.schedulingGates[*].name}')
