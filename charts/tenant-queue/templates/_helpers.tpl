@@ -15,6 +15,7 @@ their preemption stance, which is exactly the claim the design makes.
 Context: dict "quota" <map> "borrowingLimit" <map> "flavor" <string>
 */}}
 {{- define "tenant-queue.resourceGroups" -}}
+{{- $borrowingLimit := .borrowingLimit | default dict -}}
 - coveredResources:
     {{- range $resource, $_ := .quota }}
     - {{ $resource }}
@@ -25,9 +26,16 @@ Context: dict "quota" <map> "borrowingLimit" <map> "flavor" <string>
         {{- range $resource, $quantity := .quota }}
         - name: {{ $resource }}
           nominalQuota: {{ $quantity | quote }}
-          {{- $limit := index $.borrowingLimit $resource }}
-          {{- if $limit }}
-          borrowingLimit: {{ $limit | quote }}
+          {{- /*
+            hasKey, NOT truthiness. In Kueue an ABSENT borrowingLimit means "borrow as much of the
+            cohort's spare capacity as you like", while borrowingLimit: 0 means "borrow nothing" -
+            opposite meanings. A `{{ if $limit }}` test treats the integer 0 as false and drops the
+            field, turning the strictest possible setting into the most permissive one. Helm's
+            --set coerces "0" to a number, so this is reachable from the command line as well as
+            from a values file.
+          */}}
+          {{- if hasKey $borrowingLimit $resource }}
+          borrowingLimit: {{ index $borrowingLimit $resource | quote }}
           {{- end }}
         {{- end }}
 {{- end }}

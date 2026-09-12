@@ -26,6 +26,7 @@ queues:
     borrowingLimit:
       cpu: "6"
       memory: 12Gi
+      pods: "20"
     preemption:
       # Take back capacity that cohort-mates borrowed beyond their own nominal quota. This is the
       # mechanism that makes the low lane genuinely opportunistic rather than just "also running":

@@ -1,0 +1,327 @@
+name: governance-kind
+
+# Proves the governance layer on a REAL cluster: real Kueue admitting and gating real pods, real
+# Kyverno rejecting real API requests. tests/kyverno covers policy logic against fixtures, but a
+# fixture cannot tell you whether the webhook is actually wired up, whether the namespace labels
+# reach the selectors, or whether a gated pod really stays Pending.
+#
+# Deliberately separate from e2e-kind.yaml rather than bolted onto it: this needs no Airflow, no
+# Vault, no Spark and no tenant git repo, so it runs in a few minutes instead of forty-five, and a
+# failure here points at the governance layer rather than at whichever of eight components moved.
+#
+# Everything installed below is configured from the SAME values the Argo CD Applications carry,
+# read straight out of platform/bootstrap/. A test that re-declares its own values proves the test
+# works, not that the platform does.
+
+on:
+  pull_request:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch: {}
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TENANT_NS: tenant-ci-workloads
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml
+
+      - name: install kind
+        run: |
+          # This repo has its own kind/ directory, so download the binary elsewhere first.
+          curl -Lo /tmp/kind-binary https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          chmod +x /tmp/kind-binary && sudo mv /tmp/kind-binary /usr/local/bin/kind
+
+      - name: load pinned versions
+        run: |
+          source versions.env
+          {
+            echo "KIND_NODE_IMAGE=${KIND_NODE_IMAGE}"
+            echo "KUEUE_CHART_REPO=${KUEUE_CHART_REPO}"
+            echo "KUEUE_CHART_NAME=${KUEUE_CHART_NAME}"
+            echo "KUEUE_CHART_VERSION=${KUEUE_CHART_VERSION}"
+            echo "KYVERNO_CHART_REPO=${KYVERNO_CHART_REPO}"
+            echo "KYVERNO_CHART_VERSION=${KYVERNO_CHART_VERSION}"
+          } >> "$GITHUB_ENV"
+
+      - name: create cluster
+        run: |
+          cat > /tmp/governance-cluster.yaml <<EOF
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: governance
+          nodes:
+            - role: control-plane
+              image: ${KIND_NODE_IMAGE}
+          EOF
+          kind create cluster --config /tmp/governance-cluster.yaml
+          kubectl cluster-info
+
+      - name: extract the Applications' own helm values
+        run: |
+          set -euo pipefail
+          # Read the values out of the Argo CD Applications rather than restating them, so this
+          # test cannot pass against a configuration the platform does not actually deploy.
+          python3 - <<'PY'
+          import yaml
+          for name, out in (("kueue", "/tmp/kueue-values.yaml"),
+                            ("kyverno", "/tmp/kyverno-values.yaml")):
+              app = yaml.safe_load(open(f"platform/bootstrap/{name}-af-work-a.yaml"))
+              open(out, "w").write(app["spec"]["source"]["helm"]["values"])
+              print(f"extracted {name} values from its Application")
+          PY
+
+      - name: install Kueue
+        run: |
+          set -euo pipefail
+          helm install kueue "oci://${KUEUE_CHART_REPO}/${KUEUE_CHART_NAME}" \
+            --version "${KUEUE_CHART_VERSION}" \
+            -n kueue-system --create-namespace \
+            -f /tmp/kueue-values.yaml \
+            --wait --timeout 6m
+          kubectl -n kueue-system rollout status deploy/kueue-controller-manager --timeout=5m
+
+      - name: install Kyverno
+        run: |
+          set -euo pipefail
+          helm repo add kyverno "${KYVERNO_CHART_REPO}"
+          helm repo update
+          helm install kyverno kyverno/kyverno \
+            --version "${KYVERNO_CHART_VERSION}" \
+            -n kyverno --create-namespace \
+            -f /tmp/kyverno-values.yaml \
+            --wait --timeout 6m
+          kubectl -n kyverno rollout status deploy/kyverno-admission-controller --timeout=5m
+
+      - name: apply the governance layer (Enforce, so rejections are observable)
+        run: |
+          set -euo pipefail
+          # The chart ships Audit. Under Audit a violation is recorded in a PolicyReport and the
+          # request still succeeds, which cannot be asserted on with kubectl alone - so this test
+          # runs the Enforce path, which is also the path we intend to flip the chart to.
+          helm template cluster-governance charts/cluster-governance \
+            --set clusterName=governance --set policy.action=Enforce \
+            | kubectl apply --server-side -f -
+          kubectl get priorityclass platform-critical tenant-airflow \
+            tenant-workload-high tenant-workload-low
+          kubectl get clusterpolicy
+
+      - name: wait for Kyverno to actually be enforcing
+        run: |
+          set -euo pipefail
+          # A ClusterPolicy is only live once its Ready condition flips; applying a pod before
+          # that races the webhook and produces a false pass.
+          for policy in $(kubectl get clusterpolicy -o name); do
+            kubectl wait "${policy}" --for=condition=Ready --timeout=120s
+          done
+          kubectl get clusterpolicy -o wide
+
+      - name: create the tenant namespace and its queues
+        run: |
+          set -euo pipefail
+          # Real chart, real labels - this is what binds the namespace to Kueue and to the
+          # policies' namespace selectors.
+          helm template ns charts/tenant-project \
+            --set scope=namespace --set tenant=tenant-ci --set namespace="${TENANT_NS}" \
+            --set isWorkloadNamespace=true \
+            --set-string quota.requests\\.cpu=2 --set-string quota.requests\\.memory=2Gi \
+            --set-string quota.limits\\.cpu=4 --set-string quota.limits\\.memory=4Gi \
+            --set-string quota.pods=10 \
+            | kubectl apply --server-side -f -
+          kubectl get ns "${TENANT_NS}" --show-labels
+
+          # Tiny quotas: the GitHub runner's KIND node has 2 allocatable CPUs in total, so the
+          # over-quota assertion below has to be over a ceiling that fits on it.
+          helm template queues charts/tenant-queue \
+            --set tenant=tenant-ci --set clusterName=governance --set namespace="${TENANT_NS}" \
+            --set-string queues.high.nominalQuota.cpu=1 \
+            --set-string queues.high.nominalQuota.memory=1Gi \
+            --set-string queues.high.nominalQuota.pods=5 \
+            --set-string queues.high.borrowingLimit.cpu=0 \
+            --set-string queues.high.borrowingLimit.memory=0 \
+            --set-string queues.high.borrowingLimit.pods=0 \
+            | kubectl apply --server-side -f -
+          kubectl wait --for=condition=Active clusterqueue/tenant-ci-high --timeout=120s
+          kubectl -n "${TENANT_NS}" get localqueue
+
+      - name: 'Kyverno: an image from an unapproved registry is rejected'
+        run: |
+          set -euo pipefail
+          if kubectl -n "${TENANT_NS}" apply -f - <<'EOF' 2>/tmp/reject.txt
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: unapproved-registry
+            labels: {kueue.x-k8s.io/queue-name: high}
+          spec:
+            priorityClassName: tenant-workload-low
+            containers:
+              - name: c
+                image: nginx:1.27
+                resources:
+                  requests: {cpu: 100m, memory: 64Mi}
+                  limits: {cpu: 200m, memory: 128Mi}
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  capabilities: {drop: ["ALL"]}
+                  seccompProfile: {type: RuntimeDefault}
+          EOF
+          then
+            echo "::error::A pod from an unapproved registry was ACCEPTED - the registry allowlist is not enforcing."
+            kubectl -n "${TENANT_NS}" delete pod unapproved-registry --ignore-not-found
+            exit 1
+          fi
+          cat /tmp/reject.txt
+          grep -q "not from an allowed registry" /tmp/reject.txt || {
+            echo "::error::Pod was rejected, but not by the registry rule - check which policy fired."
+            exit 1
+          }
+          echo "Rejected by the registry allowlist, as intended."
+
+      - name: 'Kyverno: a tenant cannot claim a platform PriorityClass'
+        run: |
+          set -euo pipefail
+          if kubectl -n "${TENANT_NS}" apply -f - <<'EOF' 2>/tmp/reject2.txt
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: priority-escalation
+            labels: {kueue.x-k8s.io/queue-name: high}
+          spec:
+            priorityClassName: system-cluster-critical
+            containers:
+              - name: c
+                image: alpine/git:2.45.2
+                command: ["sh", "-c", "sleep 600"]
+                resources:
+                  requests: {cpu: 100m, memory: 64Mi}
+                  limits: {cpu: 200m, memory: 128Mi}
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  capabilities: {drop: ["ALL"]}
+                  seccompProfile: {type: RuntimeDefault}
+          EOF
+          then
+            echo "::error::A tenant pod claimed system-cluster-critical - it could now preempt the platform."
+            kubectl -n "${TENANT_NS}" delete pod priority-escalation --ignore-not-found
+            exit 1
+          fi
+          cat /tmp/reject2.txt
+          echo "Rejected, as intended."
+
+      - name: 'Kueue: a compliant pod is queued, admitted and runs'
+        run: |
+          set -euo pipefail
+          kubectl -n "${TENANT_NS}" apply -f - <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: admitted-task
+            labels: {kueue.x-k8s.io/queue-name: high}
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: c
+                image: alpine/git:2.45.2
+                command: ["sh", "-c", "sleep 30"]
+                resources:
+                  requests: {cpu: 200m, memory: 64Mi}
+                  limits: {cpu: 400m, memory: 128Mi}
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  capabilities: {drop: ["ALL"]}
+                  seccompProfile: {type: RuntimeDefault}
+          EOF
+          # Kueue creates a Workload object for the pod - its existence IS the proof that the pod
+          # went through quota admission rather than straight to the scheduler.
+          for i in $(seq 1 30); do
+            count=$(kubectl -n "${TENANT_NS}" get workloads -o json | jq '.items | length')
+            [ "${count}" -gt 0 ] && break
+            sleep 2
+          done
+          kubectl -n "${TENANT_NS}" get workloads -o wide
+          [ "$(kubectl -n "${TENANT_NS}" get workloads -o json | jq '.items | length')" -gt 0 ] || {
+            echo "::error::No Workload was created for the pod - Kueue is not managing this namespace."
+            exit 1
+          }
+          kubectl -n "${TENANT_NS}" wait --for=condition=Ready pod/admitted-task --timeout=180s
+          echo "Pod was admitted through the queue and is running."
+
+      - name: 'Kueue: the mutate rule defaulted the PriorityClass'
+        run: |
+          set -euo pipefail
+          actual=$(kubectl -n "${TENANT_NS}" get pod admitted-task -o jsonpath='{.spec.priorityClassName}')
+          echo "admitted-task priorityClassName=${actual}"
+          [ "${actual}" = "tenant-workload-low" ] || {
+            echo "::error::Expected the mutate rule to default tenant-workload-low, got '${actual}'."
+            exit 1
+          }
+
+      - name: 'Kueue: work beyond the queue quota is held, not run'
+        run: |
+          set -euo pipefail
+          # 2 CPU against a 1 CPU ClusterQueue with borrowingLimit 0. The namespace ResourceQuota
+          # allows it (requests.cpu 2), so anything that stops this pod is Kueue and only Kueue -
+          # which is the property the whole quota design rests on.
+          kubectl -n "${TENANT_NS}" apply -f - <<'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: over-quota-task
+            labels: {kueue.x-k8s.io/queue-name: high}
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: c
+                image: alpine/git:2.45.2
+                command: ["sh", "-c", "sleep 60"]
+                resources:
+                  requests: {cpu: "2", memory: 128Mi}
+                  limits: {cpu: "2", memory: 256Mi}
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  capabilities: {drop: ["ALL"]}
+                  seccompProfile: {type: RuntimeDefault}
+          EOF
+          sleep 45
+          phase=$(kubectl -n "${TENANT_NS}" get pod over-quota-task -o jsonpath='{.status.phase}')
+          gates=$(kubectl -n "${TENANT_NS}" get pod over-quota-task -o jsonpath='{.spec.schedulingGates[*].name}')
+          echo "over-quota-task phase=${phase} schedulingGates=[${gates}]"
+          kubectl -n "${TENANT_NS}" get workloads -o wide
+          if [ "${phase}" = "Running" ] || [ "${phase}" = "Succeeded" ]; then
+            echo "::error::A pod exceeding the ClusterQueue quota ran anyway - Kueue admission is not binding."
+            exit 1
+          fi
+          echo "${gates}" | grep -q "kueue.x-k8s.io/admission" || {
+            echo "::error::Pod is not Running but carries no Kueue scheduling gate - it is blocked by something else, so this assertion proves nothing about Kueue."
+            kubectl -n "${TENANT_NS}" describe pod over-quota-task
+            exit 1
+          }
+          echo "Held at the scheduling gate by Kueue, as intended."
+
+      - name: diagnostics
+        if: failure()
+        run: |
+          echo "::group::policies"; kubectl get clusterpolicy -o wide || true; echo "::endgroup::"
+          echo "::group::policy reports"; kubectl -n "${TENANT_NS}" get policyreport -o yaml || true; echo "::endgroup::"
+          echo "::group::queues"; kubectl get clusterqueue,resourceflavor,cohort -o wide || true; echo "::endgroup::"
+          echo "::group::workloads"; kubectl -n "${TENANT_NS}" get workloads -o yaml || true; echo "::endgroup::"
+          echo "::group::pods"; kubectl -n "${TENANT_NS}" get pods -o wide || true; echo "::endgroup::"
+          echo "::group::namespace"; kubectl get ns "${TENANT_NS}" -o yaml || true; echo "::endgroup::"
+          echo "::group::kueue logs"; kubectl -n kueue-system logs deploy/kueue-controller-manager --tail=200 || true; echo "::endgroup::"
+          echo "::group::kyverno logs"; kubectl -n kyverno logs deploy/kyverno-admission-controller --tail=200 || true; echo "::endgroup::"
