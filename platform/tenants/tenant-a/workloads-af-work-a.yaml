@@ -13,3 +13,31 @@ vault:
   esoRole: tenant-a-eso
 isLocal: true
 localAirflowServiceAccountNamespace: tenant-a-airflow
+
+# --- Kueue quota for this tenant on THIS cluster (platform-owned) -----------------------------
+# The admin's dial. Tenants choose which LANE a workload runs in; how big each lane is, is set
+# here and nowhere a tenant can reach.
+#
+# `nominal` is the guaranteed share: capacity that stays this tenant's whether or not anyone else
+# is busy, and that the high lane can reclaim from a cohort-mate that borrowed it.
+# `borrowingLimit` is how far ABOVE nominal the high lane may stretch into idle cohort capacity.
+# Together they set this tenant's absolute ceiling on this cluster: nominal + borrowingLimit.
+#
+# The low lane deliberately takes no numbers: it holds nominalQuota 0 and borrows without limit,
+# so it is bounded by whatever the cohort has spare and is the first thing reclaimed.
+#
+# MUST stay within the workload namespace's ResourceQuota (see appset-tenant-workloads.yaml's
+# inline `quota`): Kueue admits a Workload against ITS OWN accounting, and the API server then
+# applies the ResourceQuota independently. If the ResourceQuota were the tighter of the two,
+# Kueue would admit work the API server then rejects - pods stuck Pending with "exceeded quota"
+# while Kueue believes them running. The invariant (nominal + borrowingLimit <= namespace
+# ResourceQuota requests) is checked in CI by .github/workflows/lint.yaml's quota-invariant step.
+kueue:
+  nominal:
+    cpu: "6"
+    memory: 12Gi
+    pods: "20"
+  borrowingLimit:
+    cpu: "6"
+    memory: 12Gi
+    pods: "20"

@@ -1,0 +1,112 @@
+# Kyverno: admission-time policy (mutate + validate) for tenant workloads. The policies
+# themselves are NOT here - they live in charts/cluster-governance, which syncs one wave later
+# once these CRDs exist. This Application is only the engine.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno-af-work-a
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    targetRevision: "3.9.1"   # ships Kyverno v1.19.1 - see versions.env (chart/app versions differ)
+    helm:
+      values: |
+        crds:
+          install: true
+        admissionController:
+          replicas: 1
+          container:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                memory: 384Mi
+        # Background scanning is what makes the Audit rollout worth anything: it evaluates the
+        # policies against pods that are ALREADY running and files the results as PolicyReports,
+        # so "would Enforce break us?" can be answered from the current state of the cluster
+        # rather than by waiting for the next pod to be created.
+        backgroundController:
+          enabled: true
+          replicas: 1
+        reportsController:
+          enabled: true
+          replicas: 1
+        # Nothing in this platform uses Kyverno's cleanup (TTL-based resource deletion) policies.
+        # Off: one less controller on a single-node KIND cluster, and one less webhook.
+        cleanupController:
+          enabled: false
+        # PolicyException lets a namespace-local object opt a workload out of a ClusterPolicy.
+        # Off deliberately: on a multi-tenant cluster an exception mechanism that tenants could
+        # reach would undo the trust boundary the policies exist to draw. Exceptions here are a
+        # platform decision, made by editing charts/cluster-governance and going through review.
+        features:
+          policyExceptions:
+            enabled: false
+        config:
+          # Never let a policy evaluate the platform's own components. Kyverno's `resourceFilters`
+          # is a SKIP list, and this key appends "[*/*,<ns>,*]" to it - one entry per namespace
+          # Kyverno should ignore entirely. The chart's own defaults already skip kube-system,
+          # kube-public and kube-node-lease; these are this platform's namespaces on top. The
+          # ClusterPolicies in charts/cluster-governance also carry tenant-namespace selectors -
+          # this is the engine-level backstop underneath them.
+          #
+          # Do NOT reach for the similarly-named `resourceFiltersExcludeNamespaces` here: that
+          # key REMOVES entries from the skip list, i.e. it makes Kyverno start processing a
+          # namespace it was ignoring. Setting it to this list (an easy mistake - it reads like
+          # "exclude these namespaces from policy") silently un-skips kube-system, confirmed by
+          # rendering the pinned chart and diffing the resulting resourceFilters.
+          resourceFiltersIncludeNamespaces:
+            - argocd
+            - kueue-system
+            - vault
+            - external-secrets
+            - spark-operator
+            - seaweedfs
+  destination:
+    server: https://af-work-a-control-plane:6443
+    namespace: kyverno
+  ignoreDifferences:
+    # Kyverno writes its own webhook configurations at runtime: it injects the caBundle it
+    # generates, and with autoUpdateWebhooks (on by default) it rewrites the rules to match only
+    # the resource kinds the currently-installed policies actually reference. Both look like
+    # drift to Argo CD, and selfHeal reverting either one takes admission control down.
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - '.webhooks[]?.clientConfig.caBundle'
+        - '.webhooks[]?.rules'
+        - '.webhooks[]?.failurePolicy'
+        - '.webhooks[]?.namespaceSelector'
+        - '.webhooks[]?.objectSelector'
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - '.webhooks[]?.clientConfig.caBundle'
+        - '.webhooks[]?.rules'
+        - '.webhooks[]?.failurePolicy'
+        - '.webhooks[]?.namespaceSelector'
+        - '.webhooks[]?.objectSelector'
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      # Kyverno's CRDs are large enough to exceed the client-side-apply annotation limit, same
+      # reason Argo CD's own self-management Application sets ServerSideApply above.
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 5m

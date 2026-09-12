@@ -29,7 +29,10 @@ spec:
         app.kubernetes.io/managed-by: argocd
         platform.tenant: "{{.tenant}}"
       annotations:
-        argocd.argoproj.io/sync-wave: "2"
+        # Wave 3, moved down from 2: charts/cluster-governance now occupies wave 2 and
+        # must land first, because Kyverno mutates a PriorityClass onto every tenant pod
+        # and a pod naming a PriorityClass that does not exist yet is rejected.
+        argocd.argoproj.io/sync-wave: "3"
     spec:
       project: "{{.tenant}}"
       sources:
@@ -44,6 +47,23 @@ spec:
               isWorkloadNamespace: true
               workloadRunnerServiceAccount: {{.tenant}}-workload-runner
               localAirflowServiceAccountNamespace: "{{.localAirflowServiceAccountNamespace}}"
+              # Sized as a BACKSTOP above the Kueue ceiling, not as the operative limit. Kueue
+              # admits a Workload against its own accounting and the API server then applies this
+              # ResourceQuota independently; whichever is tighter is what actually binds. If it
+              # were this one, Kueue would admit work the API server then rejects - pods stuck
+              # Pending on "exceeded quota" while Kueue's own view says they are running, which
+              # is a genuinely confusing failure to debug.
+              #
+              # So: requests here must be >= (kueue.nominal + kueue.borrowingLimit) from every
+              # platform/tenants/*/workloads-*.yaml. Today the busiest case is a home cluster at
+              # 6+6 CPU / 12+12Gi / 20+20 pods, which is exactly the requests below. The
+              # invariant is enforced in CI, not by hope - see lint.yaml's quota-invariant job.
+              quota:
+                requests.cpu: "12"
+                requests.memory: 24Gi
+                limits.cpu: "24"
+                limits.memory: 32Gi
+                pods: "40"
         - repoURL: "{{.tenantRepoURL}}"
           targetRevision: "{{.tenantRepoBranch}}"
           path: deploy/workloads

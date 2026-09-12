@@ -30,7 +30,10 @@ spec:
         app.kubernetes.io/managed-by: argocd
         platform.tenant: "{{.tenant}}"
       annotations:
-        argocd.argoproj.io/sync-wave: "2"
+        # Wave 3, moved down from 2: charts/cluster-governance now occupies wave 2 and
+        # must land first, because Kyverno mutates a PriorityClass onto every tenant pod
+        # and a pod naming a PriorityClass that does not exist yet is rejected.
+        argocd.argoproj.io/sync-wave: "3"
     spec:
       project: "{{.tenant}}"
       sources:

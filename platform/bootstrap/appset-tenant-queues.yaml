@@ -1,0 +1,79 @@
+# One Application per (tenant, workload cluster): that tenant's two ClusterQueues and the
+# LocalQueues in its workload namespace on that cluster.
+#
+# project: default, NOT "{{.tenant}}" - and that is the whole point. ClusterQueue is a
+# cluster-scoped kind, and a tenant AppProject's clusterResourceWhitelist deliberately allows
+# nothing but Namespace (see charts/tenant-project/templates/appproject.yaml). Rendering queues
+# under the tenant's own project would mean widening that whitelist to include ClusterQueue,
+# which would let a tenant mint themselves quota. So the platform renders them instead, from
+# numbers held in the platform-owned registry.
+#
+# What a tenant therefore controls: which lane a workload runs in (the
+# kueue.x-k8s.io/queue-name label, naming a LocalQueue in their own namespace).
+# What a tenant cannot control: how big either lane is, whether their work is queued at all, and
+# whether gang scheduling applies - all three are set here and in the Kueue Application.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: tenant-queues
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/tarekabouzeid/airflow3-infra
+        revision: main
+        files:
+          - path: "platform/tenants/*/workloads-*.yaml"
+  template:
+    metadata:
+      name: "{{.tenant}}-queues-{{.cluster.name}}"
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        platform.tenant: "{{.tenant}}"
+      annotations:
+        # Wave 4: after the tenant namespace exists (wave 3), since the LocalQueues live in it.
+        # The ClusterQueues could go earlier, but splitting the two halves of one tenant's queue
+        # topology across waves buys nothing and makes the failure modes harder to read.
+        argocd.argoproj.io/sync-wave: "4"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/tarekabouzeid/airflow3-infra
+        targetRevision: main
+        path: charts/tenant-queue
+        helm:
+          values: |
+            tenant: {{.tenant}}
+            clusterName: {{.cluster.name}}
+            namespace: {{.tenant}}-workloads
+            queues:
+              high:
+                nominalQuota:
+                  cpu: "{{.kueue.nominal.cpu}}"
+                  memory: {{.kueue.nominal.memory}}
+                  pods: "{{.kueue.nominal.pods}}"
+                borrowingLimit:
+                  cpu: "{{.kueue.borrowingLimit.cpu}}"
+                  memory: {{.kueue.borrowingLimit.memory}}
+                  pods: "{{.kueue.borrowingLimit.pods}}"
+            # queues.low is deliberately not templated here: it is nominalQuota 0 with unlimited
+            # borrowing on every tenant and every cluster, and that is a platform-wide property
+            # of what "the low lane" MEANS, not a per-tenant setting. It lives in
+            # charts/tenant-queue/values.yaml so there is one place to change it for everyone.
+      destination:
+        server: "{{.cluster.server}}"
+        namespace: "{{.tenant}}-workloads"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 15s
+            factor: 2
+            maxDuration: 3m

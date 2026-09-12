@@ -1,0 +1,45 @@
+# The governance objects themselves: PriorityClasses, the Kueue ResourceFlavor + Cohort, and the
+# Kyverno ClusterPolicy set. Split from the kueue-af-work-b / kyverno-af-work-b Applications on
+# purpose - those install ENGINES, this installs POLICY, and policy changes far more often than
+# an engine version does. Keeping them apart means tightening a rule is a one-file diff that
+# cannot disturb a running controller.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-governance-af-work-b
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    # Wave 2: after the engines (wave 1) so the Kueue and Kyverno CRDs exist, and before the
+    # tenant layer (wave 3) so the PriorityClasses that Kyverno mutates onto tenant pods exist
+    # before any tenant pod is created. A pod naming a PriorityClass that does not exist yet is
+    # rejected outright, so this ordering is load-bearing, not cosmetic.
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/tarekabouzeid/airflow3-infra
+    targetRevision: main
+    path: charts/cluster-governance
+    helm:
+      values: |
+        clusterName: af-work-b
+  destination:
+    server: https://af-work-b-control-plane:6443
+    # Everything this chart renders is cluster-scoped except nothing - there are no namespaced
+    # objects in it. The namespace below is only where Argo CD anchors the Application.
+    namespace: kueue-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 3m

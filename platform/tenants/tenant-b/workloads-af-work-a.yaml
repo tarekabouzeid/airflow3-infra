@@ -10,3 +10,18 @@ vault:
   esoRole: tenant-b-eso
 isLocal: false
 localAirflowServiceAccountNamespace: ""
+
+# --- Kueue quota for this tenant on THIS cluster (platform-owned) -----------------------------
+# Smaller than this tenant's home cluster on purpose: this is the cluster the tenant only reaches
+# across the network for specific remote tasks, not where the bulk of its work runs. See the
+# corresponding home-cluster registry file for what each field means and for the ResourceQuota
+# invariant these numbers have to respect.
+kueue:
+  nominal:
+    cpu: "3"
+    memory: 6Gi
+    pods: "10"
+  borrowingLimit:
+    cpu: "3"
+    memory: 6Gi
+    pods: "10"

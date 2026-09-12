@@ -1,0 +1,167 @@
+# Kueue: quota-based admission and queueing for tenant batch work. Runs on every workload
+# cluster; nothing on af-mgmt is queued.
+#
+# Chart source is an OCI registry - Kueue publishes no classic HTTP chart repo. Argo CD >= 3.x
+# takes a public OCI chart as a plain repoURL with NO "oci://" prefix and no repository Secret
+# (argo-cd v3.5.2 docs/user-guide/helm.md), which is why this looks like every other platform
+# Application here despite not being an HTTPS chart repo.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kueue-af-work-a
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    # Wave 1, with the other operators: Kueue's CRDs must exist before wave 2 renders the
+    # ResourceFlavor/Cohort in charts/cluster-governance, and before wave 4 renders any queue.
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: registry.k8s.io/kueue/charts
+    chart: kueue
+    targetRevision: "0.19.4"   # see versions.env (KUEUE_CHART_VERSION)
+    helm:
+      values: |
+        controllerManager:
+          manager:
+            image:
+              # Pinned explicitly rather than inherited from the chart's own default. The
+              # published 0.19.4 chart already defaults to exactly this, but repo rule 1 wants
+              # versions.env to be where a version is stated and rule 7 wants no floating tag
+              # anywhere near something deployed - the chart's IN-TREE default is the staging
+              # registry on a rolling "release-0.19" tag.
+              repository: registry.k8s.io/kueue/kueue
+              tag: v0.19.4
+              pullPolicy: IfNotPresent
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: "1"
+                memory: 512Mi
+          featureGates:
+            # SparkApplication support is alpha in Kueue and off by default. It is what makes
+            # Spark gang-scheduled: with it, Kueue sets spec.suspend on an incoming
+            # SparkApplication and only clears it once the driver AND all executors fit at once,
+            # so a Spark job never half-starts and sits holding a driver while its executors
+            # wait. Requires Spark Operator >= 2.4.0; this platform pins 2.5.2.
+            - name: SparkApplicationIntegration
+              enabled: true
+        # The visibility API's auth-reader RoleBinding must live in kube-system (it binds a
+        # built-in Role that only exists there). Nothing here consumes the visibility API, and a
+        # platform Application reaching into kube-system for a feature we do not use is blast
+        # radius for nothing - so it is off. Turn it back on if pending-workload introspection
+        # via the aggregated API is ever wanted.
+        enableVisibilityAuthReaderRoleBinding: false
+        managerConfig:
+          controllerManagerConfigYaml: |-
+            apiVersion: config.kueue.x-k8s.io/v1beta2
+            kind: Configuration
+            health:
+              healthProbeBindAddress: :8081
+            metrics:
+              bindAddress: :8443
+            webhook:
+              port: 9443
+            leaderElection:
+              leaderElect: true
+              resourceName: c1f6bfd2.kueue.x-k8s.io
+            controller:
+              groupKindConcurrency:
+                Job.batch: 5
+                Pod: 5
+                Workload.kueue.x-k8s.io: 10
+                LocalQueue.kueue.x-k8s.io: 5
+                ClusterQueue.kueue.x-k8s.io: 5
+                ResourceFlavor.kueue.x-k8s.io: 1
+            clientConnection:
+              qps: 300
+              burst: 500
+            # THE bypass-proof setting. With this true, every supported workload in a selected
+            # namespace is queue-managed whether or not it carries a queue-name label - a tenant
+            # cannot dodge quota by simply not asking to be queued. It is only safe because the
+            # selector below narrows it to namespaces that contain nothing but tenant task pods.
+            manageJobsWithoutQueueName: true
+            # Opt-IN namespace management, not opt-out. The label is stamped only on
+            # "<tenant>-workloads" namespaces by charts/tenant-project. Critically this does NOT
+            # match "<tenant>-airflow": a tenant's scheduler, dag-processor, api-server and
+            # triggerer are long-running Deployments, and a queueing system that suspended them
+            # pending quota would take the tenant's whole Airflow offline rather than delay a
+            # task. It also does not match any platform namespace.
+            managedJobsNamespaceSelector:
+              matchLabels:
+                platform.kueue-managed: "true"
+            # Gang scheduling, cluster-wide and not a tenant knob. Kueue admits a Workload
+            # all-or-nothing; waitForPodsReady adds the second half of that guarantee - if the
+            # admitted pods do not ALL become ready inside the timeout, the whole Workload is
+            # evicted and requeued rather than left half-running holding quota.
+            #
+            # blockAdmission: true admits workloads one at a time, which is what actually
+            # prevents the classic deadlock of two multi-pod jobs each holding half the capacity
+            # the other needs. It costs admission throughput; on a batch platform that is the
+            # right trade.
+            waitForPodsReady:
+              timeout: 15m
+              recoveryTimeout: 10m
+              blockAdmission: true
+              requeuingStrategy:
+                timestamp: Eviction
+                backoffLimitCount: 5
+                backoffBaseSeconds: 60
+                backoffMaxSeconds: 1800
+            integrations:
+              # Trimmed to the three kinds this platform actually produces, so Kueue's
+              # controllers reconcile nothing else. Note what this does NOT do: the chart
+              # registers webhook entries for every framework it supports regardless of this
+              # list (confirmed by rendering the pinned chart - mdeployment/mstatefulset/mrayjob
+              # entries are present either way). What keeps those off platform workloads is the
+              # namespaceSelector, which the chart derives from managedJobsNamespaceSelector
+              # above and stamps onto every framework webhook.
+              #
+              # Consequence worth knowing: the pod webhooks are failurePolicy: Fail inside
+              # selected namespaces. If the Kueue controller is down, pod creation in
+              # "<tenant>-workloads" fails rather than proceeding unqueued. That is fail-closed
+              # by design - an unqueued pod is an unaccounted pod - but it means Kueue is a hard
+              # dependency for tenant task execution, and NOT for the tenants' Airflow control
+              # planes, which live in namespaces this selector does not match.
+              frameworks:
+                - "batch/job"
+                - "pod"
+                - "sparkoperator.k8s.io/sparkapplication"
+  destination:
+    server: https://af-work-a-control-plane:6443
+    namespace: kueue-system
+  # Kueue provisions its own webhook certificates at runtime (internal cert management, no
+  # cert-manager) and patches the caBundle into its webhook configurations after they are
+  # created. Without this, Argo CD sees a populated caBundle as drift from the chart's empty one
+  # and selfHeal wipes it on the next reconcile - which breaks every webhook Kueue owns and
+  # silently stops workloads being queued at all.
+  ignoreDifferences:
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - '.webhooks[]?.clientConfig.caBundle'
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - '.webhooks[]?.clientConfig.caBundle'
+    - group: apiregistration.k8s.io
+      kind: APIService
+      jqPathExpressions:
+        - '.spec.caBundle'
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 15s
+        factor: 2
+        maxDuration: 5m
