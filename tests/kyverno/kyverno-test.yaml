@@ -1,0 +1,170 @@
+# Per-rule expectations for the governance ClusterPolicies.
+#
+# The point of asserting per rule, rather than just "kyverno apply exited 0", is that a
+# ClusterPolicy Kyverno refuses to load is reported as a skip, not an error - and a policy that
+# never evaluates anything produces an empty PolicyReport, which in Audit mode is indistinguishable
+# from a clean cluster. That is not hypothetical: the pod-security rule shipped inert in this
+# repo's first draft because a container-level PSS control exclusion needs an `images` list, and
+# only an explicit "this resource must FAIL this rule" assertion catches it.
+#
+# `rendered-policies.yaml` is produced by render-policies.py (gitignored). Run locally with:
+#   python3 tests/kyverno/render-policies.py "$(command -v helm)" tests/kyverno/rendered-policies.yaml
+#   kyverno test tests/kyverno
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: cluster-governance
+policies:
+  - rendered-policies.yaml
+resources:
+  - resources/pods.yaml
+  - resources/services.yaml
+# Supplies the namespace labels the policies select on. Without it every rule reports skip.
+variables: values.yaml
+results:
+  # --- image provenance -----------------------------------------------------------------------
+  - policy: tenant-restrict-image-registries
+    rule: allowed-registries
+    kind: Pod
+    result: fail
+    resources:
+      - unapproved-registry
+  - policy: tenant-restrict-image-registries
+    rule: allowed-registries
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+      - floating-tag
+      - oversized-container
+  - policy: tenant-restrict-image-registries
+    rule: require-explicit-image-tag
+    kind: Pod
+    result: fail
+    resources:
+      - floating-tag
+  - policy: tenant-restrict-image-registries
+    rule: require-explicit-image-tag
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+
+  # --- resource bounds ------------------------------------------------------------------------
+  - policy: tenant-container-resource-bounds
+    rule: bounded-requests-and-limits
+    kind: Pod
+    result: fail
+    resources:
+      - oversized-container
+  - policy: tenant-container-resource-bounds
+    rule: bounded-requests-and-limits
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+
+  # --- scheduling -----------------------------------------------------------------------------
+  - policy: tenant-scheduling-bounds
+    rule: allowed-priority-classes
+    kind: Pod
+    result: fail
+    resources:
+      - priority-escalation
+  - policy: tenant-scheduling-bounds
+    rule: allowed-priority-classes
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+  - policy: tenant-scheduling-bounds
+    rule: deny-node-pinning
+    kind: Pod
+    result: fail
+    resources:
+      - node-pinned
+  - policy: tenant-scheduling-bounds
+    rule: deny-node-pinning
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+  - policy: tenant-scheduling-bounds
+    rule: deny-host-ports
+    kind: Pod
+    result: fail
+    resources:
+      - host-port
+  - policy: tenant-scheduling-bounds
+    rule: deny-host-ports
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+
+  # --- pod security ---------------------------------------------------------------------------
+  # Two assertions that matter beyond "privileged is rejected": that the rule EVALUATES at all
+  # (a skip here means the policy failed to load), and that the platform's own image shape still
+  # passes under the narrowed Seccomp/Capabilities exclusions.
+  - policy: tenant-pod-security
+    rule: pod-security-standard
+    kind: Pod
+    result: fail
+    resources:
+      - privileged
+      - host-port
+  - policy: tenant-pod-security
+    rule: pod-security-standard
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+      - unapproved-registry
+
+  # --- control-plane tolerations ---------------------------------------------------------------
+  - policy: tenant-scheduling-bounds
+    rule: deny-control-plane-tolerations
+    kind: Pod
+    result: fail
+    resources:
+      - tolerates-control-plane
+  - policy: tenant-scheduling-bounds
+    rule: deny-control-plane-tolerations
+    kind: Pod
+    result: pass
+    resources:
+      - compliant-task
+
+  # --- priority defaulting (mutate) -------------------------------------------------------------
+  # A pod that names no PriorityClass must come out of admission with one, chosen by what the
+  # namespace is for. Asserted against the patched resource, not just "the rule ran": the failure
+  # that matters here is the two namespace roles being wired to the wrong classes, which produces
+  # a perfectly valid pod that simply outranks things it should not.
+  - policy: tenant-default-priority-class
+    rule: default-workload-priority
+    kind: Pod
+    result: pass
+    resources:
+      - unprioritised-task
+    patchedResources: resources/patched-priority.yaml
+  - policy: tenant-default-priority-class
+    rule: default-airflow-control-plane-priority
+    kind: Pod
+    result: pass
+    resources:
+      - unprioritised-airflow-component
+    patchedResources: resources/patched-priority.yaml
+
+  # --- services -------------------------------------------------------------------------------
+  - policy: tenant-restrict-service-types
+    rule: no-nodeport-or-loadbalancer
+    kind: Service
+    result: fail
+    resources:
+      - nodeport-svc
+  - policy: tenant-restrict-service-types
+    rule: no-nodeport-or-loadbalancer
+    kind: Service
+    result: pass
+    resources:
+      - internal-svc

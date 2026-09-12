@@ -42,6 +42,7 @@ jobs:
           helm repo add spark-operator "${SPARK_OPERATOR_CHART_REPO}"
           helm repo add headlamp "${HEADLAMP_CHART_REPO}"
           helm repo add seaweedfs "${SEAWEEDFS_CHART_REPO}"
+          helm repo add kyverno "${KYVERNO_CHART_REPO}"
           helm repo update
 
           check() {
@@ -61,6 +62,25 @@ jobs:
           check "apache-airflow/airflow" "${AIRFLOW_CHART_VERSION}"
           check "headlamp/headlamp" "${HEADLAMP_CHART_VERSION}"
           check "seaweedfs/seaweedfs" "${SEAWEEDFS_CHART_VERSION}"
+          check "kyverno/kyverno" "${KYVERNO_CHART_VERSION}"
+
+          # Kueue publishes no classic chart repo - only an OCI one - so `helm search repo` cannot
+          # see it. Pull the chart metadata straight from the registry instead, which proves both
+          # that the version exists and that an unauthenticated client can fetch it (the same
+          # thing Argo CD's repo-server will do).
+          echo "checking ${KUEUE_CHART_REPO}/${KUEUE_CHART_NAME} @ ${KUEUE_CHART_VERSION}"
+          if ! helm show chart "oci://${KUEUE_CHART_REPO}/${KUEUE_CHART_NAME}" \
+               --version "${KUEUE_CHART_VERSION}" > /tmp/kueue-chart.yaml; then
+            echo "::error::Kueue chart ${KUEUE_CHART_VERSION} could not be pulled from oci://${KUEUE_CHART_REPO}"
+            exit 1
+          fi
+          # appVersion must match what versions.env claims, or the pinned image tag below is
+          # pinning something the chart was never built against.
+          actual_app=$(grep '^appVersion:' /tmp/kueue-chart.yaml | awk '{print $2}' | tr -d '"')
+          if [ "${actual_app}" != "${KUEUE_APP_VERSION}" ]; then
+            echo "::error::Kueue chart ${KUEUE_CHART_VERSION} has appVersion ${actual_app}, but versions.env says ${KUEUE_APP_VERSION}"
+            exit 1
+          fi
 
           echo "Latest available versions (informational - not enforced):"
           helm search repo argo/argo-cd --versions | head -5 || true
@@ -94,6 +114,10 @@ jobs:
         run: helm dependency build charts/airflow-tenant
       - name: helm lint - airflow-tenant
         run: helm lint charts/airflow-tenant --set image.tag=3.1.7-hashicorp-2
+      - name: helm lint - cluster-governance
+        run: helm lint charts/cluster-governance
+      - name: helm lint - tenant-queue
+        run: helm lint charts/tenant-queue
 
       - name: render tenant-project (scope=project)
         run: helm template tenant-a-project charts/tenant-project -f tests/fixtures/tenant-a-project.yaml > /tmp/render-project.yaml
@@ -105,9 +129,32 @@ jobs:
         run: helm template postgres charts/postgres-lite -f tests/fixtures/postgres-lite.yaml > /tmp/render-postgres.yaml
       - name: render airflow-tenant
         run: helm template tenant-a-airflow charts/airflow-tenant -f tests/fixtures/tenant-a-airflow.yaml > /tmp/render-airflow.yaml
+      - name: render cluster-governance
+        run: helm template cluster-governance charts/cluster-governance -f tests/fixtures/cluster-governance.yaml > /tmp/render-governance.yaml
+      - name: render tenant-queue
+        run: helm template tenant-a-queues charts/tenant-queue -f tests/fixtures/tenant-a-queue.yaml > /tmp/render-queues.yaml
 
       - name: kubeconform - platform-owned CRs (no CRD schemas needed)
         run: kubeconform -strict -summary -ignore-missing-schemas /tmp/render-project.yaml /tmp/render-airflow-ns.yaml /tmp/render-workloads-ns.yaml /tmp/render-postgres.yaml
+
+      # Kueue's ClusterQueue/LocalQueue/Cohort/ResourceFlavor and Kyverno's ClusterPolicy are all
+      # CRD-backed, so kubeconform's -ignore-missing-schemas would wave them through unchecked -
+      # which is precisely where a wrong field name hides. Validate them against the CRDs shipped
+      # in the pinned upstream releases instead. This is not theoretical: it is what caught
+      # ResourceFlavor rendering a bare `spec:` (null, rejected by the CRD) whenever the flavor
+      # had no node labels or taints.
+      - name: CRD-schema validate the governance objects
+        run: |
+          set -euo pipefail
+          source versions.env
+          pip install --quiet pyyaml jsonschema
+          mkdir -p /tmp/crds
+          helm pull "oci://${KUEUE_CHART_REPO}/${KUEUE_CHART_NAME}" --version "${KUEUE_CHART_VERSION}" \
+            --untar --untardir /tmp/kueue-chart
+          cp /tmp/kueue-chart/kueue/templates/crd/*.yaml /tmp/crds/
+          curl -sSL "https://raw.githubusercontent.com/kyverno/kyverno/${KYVERNO_APP_VERSION}/config/crds/kyverno/kyverno.io_clusterpolicies.yaml" \
+            -o /tmp/crds/kyverno_clusterpolicies.yaml
+          python3 tests/validate_against_crds.py '/tmp/crds/*.yaml' /tmp/render-governance.yaml /tmp/render-queues.yaml
 
       - name: kubeconform - airflow-tenant (core k8s + CRD catalog for external-secrets)
         run: |
@@ -125,6 +172,29 @@ jobs:
             echo "checking serviceAccountName on component: ${component}"
             python3 tests/assert_service_account.py "${component}"
           done
+
+      - name: ApplicationSet templates resolve against the real tenant registry
+        run: |
+          set -euo pipefail
+          pip install --quiet pyyaml
+          # ApplicationSet goTemplate values are just strings until Argo CD renders them against a
+          # live registry entry, so a typo in {{.kueue.nominal.cpu}} - or a key missing from one of
+          # the four workloads-*.yaml files - is invisible to every other check here.
+          for appset in platform/bootstrap/appset-*.yaml; do
+            echo "::group::${appset}"
+            python3 tests/render_appset_values.py "${appset}" /tmp/appset-values
+            echo "::endgroup::"
+          done
+          # And the resolved values must actually render the chart they are aimed at.
+          for values in /tmp/appset-values/*-queues-*.source0.yaml; do
+            echo "rendering charts/tenant-queue with ${values}"
+            helm template q charts/tenant-queue -f "${values}" > /dev/null
+          done
+
+      - name: Kueue ceiling fits inside the namespace ResourceQuota
+        run: |
+          pip install --quiet pyyaml
+          python3 tests/check_quota_invariant.py
 
       - name: upload rendered manifests
         if: always()

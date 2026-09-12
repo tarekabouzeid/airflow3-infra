@@ -34,6 +34,8 @@ jobs:
           helm template p3 charts/tenant-project -f tests/fixtures/tenant-a-workloads-ns.yaml > /tmp/render/workloads-ns.yaml
           helm dependency build charts/airflow-tenant
           helm template p4 charts/airflow-tenant -f tests/fixtures/tenant-a-airflow.yaml > /tmp/render/airflow.yaml
+          helm template p5 charts/cluster-governance -f tests/fixtures/cluster-governance.yaml > /tmp/render/governance.yaml
+          helm template p6 charts/tenant-queue -f tests/fixtures/tenant-a-queue.yaml > /tmp/render/queues.yaml
       - name: policy check - rendered charts
         run: conftest test --policy tests/policy /tmp/render/*.yaml
       - name: policy check - static platform Applications
@@ -42,3 +44,36 @@ jobs:
         # tenant-projects) are goTemplate manifests, not real objects, until Argo CD renders them
         # against a live tenant registry entry - those are validated for real in e2e-kind.yaml
         # instead of here.
+
+  kyverno-policy-tests:
+    # The governance ClusterPolicies get their own suite, separate from conftest. conftest answers
+    # "is this manifest well-formed and does it follow our repo conventions"; this answers "does
+    # this policy actually reject the thing it claims to reject", by running the real Kyverno
+    # engine against fixture pods and asserting a result per rule.
+    #
+    # Worth its own job because a policy that Kyverno refuses to load is not an error anywhere
+    # else: `helm template` renders it, the CRD schema accepts it, the API server stores it, and
+    # it then evaluates nothing. In the Audit mode this chart ships, that produces empty
+    # PolicyReports - indistinguishable from a clean cluster.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml
+      - name: install the kyverno CLI
+        run: |
+          set -euo pipefail
+          source versions.env
+          # The CLI is versioned with Kyverno itself, so pin it to the same appVersion the chart
+          # ships - a CLI from a different minor can accept policy syntax the running engine does
+          # not, which would make these tests pass against something the cluster rejects.
+          # Asset name comes straight from upstream's .goreleaser.yml:
+          # kyverno-cli_{{ .Tag }}_{{ .Os }}_x86_64.tar.gz, where .Tag keeps the leading "v".
+          curl -sSL "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_APP_VERSION}/kyverno-cli_${KYVERNO_APP_VERSION}_linux_x86_64.tar.gz" | tar xz
+          sudo mv kyverno /usr/local/bin/
+          kyverno version
+      - name: governance policies behave as documented
+        run: python3 tests/kyverno/run.py

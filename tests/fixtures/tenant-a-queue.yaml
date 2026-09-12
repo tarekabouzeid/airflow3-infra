@@ -1,0 +1,17 @@
+# Render fixture for charts/tenant-queue. Mirrors what appset-tenant-queues feeds it for
+# tenant-a on its home cluster (platform/tenants/tenant-a/workloads-af-work-a.yaml), so a drift
+# between the chart's expectations and the registry's shape shows up here as well as in the
+# ApplicationSet resolution step.
+tenant: tenant-a
+clusterName: af-work-a
+namespace: tenant-a-workloads
+queues:
+  high:
+    nominalQuota:
+      cpu: "6"
+      memory: 12Gi
+      pods: "20"
+    borrowingLimit:
+      cpu: "6"
+      memory: 12Gi
+      pods: "20"

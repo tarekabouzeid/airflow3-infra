@@ -1,0 +1,22 @@
+# Render fixture for charts/cluster-governance. Deliberately exercises the NON-default shape of
+# every value that changes what is rendered, so CI does not only ever see the chart's own
+# defaults: a flavor with node labels and taints (which is what makes ResourceFlavor's spec
+# non-empty), an explicit cohort quota (which switches the Cohort from `resourceGroups: []` to a
+# real quota block), and Enforce rather than Audit.
+clusterName: af-work-a
+kueue:
+  flavor:
+    name: default-flavor
+    nodeLabels:
+      kubernetes.io/arch: amd64
+    nodeTaints:
+      - key: platform.example/batch
+        value: "true"
+        effect: NoSchedule
+  cohort:
+    name: tenants
+    quota:
+      cpu: "24"
+      memory: 48Gi
+policy:
+  action: Enforce

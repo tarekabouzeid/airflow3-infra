@@ -1,0 +1,19 @@
+# Namespace context for the Kyverno CLI. Every ClusterPolicy in charts/cluster-governance matches
+# on a namespace selector, and the CLI has no cluster to look namespaces up in - without this,
+# every rule would report "skip" and the test would pass while proving nothing.
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Value
+metadata:
+  name: governance-test-values
+namespaceSelector:
+  - name: tenant-a-workloads
+    labels:
+      platform.tenant-namespace: "true"
+      platform.tenant: tenant-a
+      platform.namespace-role: workloads
+      platform.kueue-managed: "true"
+  - name: tenant-a-airflow
+    labels:
+      platform.tenant-namespace: "true"
+      platform.tenant: tenant-a
+      platform.namespace-role: airflow

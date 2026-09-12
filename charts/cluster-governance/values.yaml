@@ -164,15 +164,42 @@ policy:
     # carries the level we cannot afford to lose.
     level: restricted
     version: latest
-    # Controls exempted from `restricted`. Airflow's official chart and the Spark images set a
-    # numeric runAsUser but do not set seccompProfile or drop ALL capabilities on every container,
-    # so enforcing those two outright would reject legitimate platform-supplied workloads. They
-    # are carried as exclusions rather than dropping to `baseline` wholesale, so the rest of
-    # `restricted` (no privilege escalation, no root filesystem writes where declared, runAsNonRoot)
-    # still applies and the gap is explicit and greppable.
+    # Controls exempted from `restricted`, and for WHICH images. Airflow's official chart and the
+    # apache/spark images set a numeric runAsUser but do not set seccompProfile or drop ALL
+    # capabilities on every container, so enforcing those two outright would reject workloads the
+    # platform itself supplies. They are carried as narrow exclusions rather than dropping the
+    # whole namespace to `baseline`, so the rest of `restricted` - no privilege escalation, no
+    # running as root, no non-ephemeral volume types - still applies.
+    #
+    # `images` is not optional decoration on a CONTAINER-level control: Kyverno rejects the whole
+    # policy without it ("exclude.images must be specified for the container level control") and
+    # the API server then stores a policy that never evaluates anything. In Audit mode that is
+    # invisible - the reports are simply empty, which reads exactly like compliance. Caught by
+    # tests/kyverno, which asserts each rule's result rather than just that nothing errored.
+    #
+    # Listing the platform's own images rather than "*" is what keeps this honest: a tenant
+    # bringing their own image still has to satisfy every control.
     exclude:
       - controlName: "Seccomp"
+        images:
+          - "localhost:5001/airflow-tenant*"
+          - "kind-registry:5000/airflow-tenant*"
+          - "apache/spark*"
+          - "docker.io/apache/spark*"
+          - "postgres*"
+          - "docker.io/library/postgres*"
+          - "alpine/git*"
+          - "docker.io/alpine/git*"
       - controlName: "Capabilities"
+        images:
+          - "localhost:5001/airflow-tenant*"
+          - "kind-registry:5000/airflow-tenant*"
+          - "apache/spark*"
+          - "docker.io/apache/spark*"
+          - "postgres*"
+          - "docker.io/library/postgres*"
+          - "alpine/git*"
+          - "docker.io/alpine/git*"
 
   services:
     # NodePort and LoadBalancer are cluster-level resources: a NodePort is a port on every node

@@ -1,0 +1,62 @@
+# Expected output of the tenant-default-priority-class MUTATE rules, asserted by kyverno-test.yaml.
+#
+# The assertion that matters is the priorityClassName on each: a pod in a tenant's WORKLOAD
+# namespace defaults to tenant-workload-low, and the identical pod shape in a tenant's AIRFLOW
+# namespace defaults to the far higher tenant-airflow. Wiring those two namespace roles to the
+# wrong classes produces a perfectly valid pod that simply outranks things it should not, and no
+# validate rule would notice - both classes are on the tenant allowlist.
+#
+# Regenerate after changing the mutate rules:
+#   kyverno apply tests/kyverno/rendered-policies.yaml \
+#     --resource tests/kyverno/resources/pods.yaml \
+#     --values-file tests/kyverno/values.yaml -o /tmp/patched
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unprioritised-task
+  namespace: tenant-a-workloads
+spec:
+  priorityClassName: tenant-workload-low
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: task
+      image: apache/spark:4.0.4
+      resources:
+        requests: {cpu: "100m", memory: 128Mi}
+        limits: {cpu: "1", memory: 1Gi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unprioritised-airflow-component
+  namespace: tenant-a-airflow
+spec:
+  priorityClassName: tenant-airflow
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: scheduler
+      image: localhost:5001/airflow-tenant:3.1.7-hashicorp-2
+      resources:
+        requests: {cpu: "100m", memory: 256Mi}
+        limits: {cpu: "1", memory: 1Gi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
