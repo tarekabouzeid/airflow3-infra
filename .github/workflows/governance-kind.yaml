@@ -236,7 +236,13 @@ jobs:
       - name: 'Kueue: a compliant pod is queued, admitted and runs'
         run: |
           set -euo pipefail
-          kubectl -n "${TENANT_NS}" apply -f - <<'EOF'
+          # Capture the apply rather than letting `set -e` kill the step on a non-zero exit with
+          # nothing printed. Three rounds of this workflow were spent inferring why this step died
+          # instantly, because a bare `kubectl apply` under `set -e` produces no output of its own
+          # in the step log - the only trace was in the admission controller's log, which the
+          # diagnostics step then buried. If the API server rejects this pod, say so here.
+          set +e
+          apply_out=$(kubectl -n "${TENANT_NS}" apply -f - 2>&1 <<'EOF'
           apiVersion: v1
           kind: Pod
           metadata:
@@ -258,6 +264,22 @@ jobs:
                   capabilities: {drop: ["ALL"]}
                   seccompProfile: {type: RuntimeDefault}
           EOF
+          )
+          apply_rc=$?
+          set -e
+          echo "kubectl apply exit=${apply_rc}"
+          echo "${apply_out}"
+          if [ "${apply_rc}" -ne 0 ]; then
+            echo "::error::A compliant pod was REJECTED. The message above is the API server's own reason - a Kyverno rule, Kueue's pod webhook, Pod Security Admission, or the ResourceQuota."
+            echo "::group::webhook configurations in the path of this pod"
+            kubectl get mutatingwebhookconfigurations,validatingwebhookconfigurations \
+              -o custom-columns='KIND:.kind,NAME:.metadata.name' || true
+            echo "::endgroup::"
+            echo "::group::recent namespace events"
+            kubectl -n "${TENANT_NS}" get events --sort-by=.lastTimestamp | tail -n 30 || true
+            echo "::endgroup::"
+            exit 1
+          fi
           echo "--- pod as admitted (after mutation) ---"
           kubectl -n "${TENANT_NS}" get pod admitted-task \
             -o custom-columns='NAME:.metadata.name,PRIORITY:.spec.priorityClassName,GATES:.spec.schedulingGates[*].name,PHASE:.status.phase'
