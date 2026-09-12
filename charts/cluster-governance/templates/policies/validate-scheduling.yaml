@@ -43,10 +43,13 @@ spec:
           components the tenant's own Airflow depends on.
         pattern:
           spec:
-            # No =() anchor: by the time this rule runs, mutate-priority-class.yaml has already
-            # added a default for any pod that named none, so the field is always present and
-            # requiring it here catches a pod that somehow skipped mutation.
-            priorityClassName: {{ join " | " .Values.policy.scheduling.allowedTenantPriorityClasses | quote }}
+            # =() anchor - validate only if the field is present. Nothing defaults
+            # priorityClassName any more: that mutation moved to Kueue's WorkloadPriorityClass
+            # label, because Kubernetes' Priority admission plugin refuses a pod whose class name
+            # was changed by a webhook (see mutate-priority-class.yaml). Requiring the field here
+            # would therefore reject every ordinary tenant pod, which names none - the rule's job
+            # is to bound what a tenant MAY name, not to insist they name something.
+            =(priorityClassName): {{ join " | " .Values.policy.scheduling.allowedTenantPriorityClasses | quote }}
 {{- end }}
 {{- if .Values.policy.scheduling.denyNodeName }}
     - name: deny-node-pinning

@@ -1,77 +1,61 @@
 {{- /*
-Default a PriorityClass onto every tenant pod that names none, chosen by what the namespace is
-FOR. This is why priorityClasses.globalDefault is false everywhere: a global default cannot tell
-a tenant's Airflow scheduler apart from a tenant's Spark executor, and getting that backwards is
-how a batch task ends up outranking the scheduler that launched it.
+Give every tenant workload a Kueue queueing priority matching the lane it was submitted to.
 
-Kyverno runs mutating rules in the mutating admission phase and validating rules in the
-validating phase, so this always lands before validate-scheduling.yaml's allowed-priority-classes
-rule reads the field.
+This rule used to set the pod's own `spec.priorityClassName`, and that does not work. Kubernetes'
+built-in Priority admission plugin owns that field: it resolves the class name to an integer,
+stamps it into `spec.priority`, and rejects any pod whose integer disagrees with its name. A
+mutating webhook that changes the name after the integer is stamped creates exactly that
+disagreement, and the API server refuses the pod outright:
 
-`+(key)` is Kyverno's "add if not present" anchor - a pod that already names an allowed class
-keeps it, and one that names a disallowed class is left alone here and rejected by the validate
-rule, which reports the real problem instead of silently overwriting it.
+  pods "admitted-task" is forbidden: the integer value of priority (0) must not be provided in
+  pod spec; priority admission controller computed 1000 from the given PriorityClass name
 
-Note there is deliberately NO mutate rule for the Kueue queue label. Kueue handles that itself:
-`manageJobsWithoutQueueName: true` scoped by `managedJobsNamespaceSelector` makes every workload
-in a tenant workload namespace managed whether or not it asks to be, and the LocalQueue named
-`default` that charts/tenant-queue creates in each of those namespaces is picked up by Kueue's
-LocalQueueDefaulting (stable since Kueue v0.17). Doing it in Kueue rather than here means there
-is no window in which a pod is admitted by the API server but unknown to the quota system.
+Found only by governance-kind, on a real cluster - every fixture test passed, because the Kyverno
+CLI does not run Kubernetes' built-in admission chain.
+
+Kueue's WorkloadPriorityClass is selected by a LABEL, which no built-in plugin defends, so it can
+be set safely here. The lane a tenant picks therefore still decides queueing priority, and the
+tenant still sets exactly one field - but the mechanism is now one Kubernetes is happy to allow.
+
+What a tenant pod's own `spec.priorityClassName` ends up as: whatever the tenant set, or unset
+(pod priority 0) if they set nothing. Either way it stays below tenant-airflow and far below
+platform-critical, so platform components continue to outrank tenant work - and
+validate-scheduling.yaml's allowlist is what stops a tenant naming something higher.
 */ -}}
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
-  name: tenant-default-priority-class
+  name: tenant-default-queue-priority
   labels:
     {{- include "cluster-governance.labels" . | nindent 4 }}
   annotations:
-    policies.kyverno.io/title: Default tenant PriorityClass
+    policies.kyverno.io/title: Default tenant Kueue priority from the queue lane
     policies.kyverno.io/category: Multi-tenancy
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
-      Gives every tenant pod a PriorityClass appropriate to the namespace it lands in, so that
-      neither the kube-scheduler nor Kueue ever has to rank an unclassified pod.
+      Sets the Kueue WorkloadPriorityClass label from the queue lane a tenant chose, so the lane
+      and the queueing priority cannot be set to disagree.
 spec:
   background: false
   rules:
-    - name: default-airflow-control-plane-priority
+    {{- /*
+      Two rules matched by label selector rather than one with a JMESPath precondition: a selector
+      needs no inline expression, so this file stays free of the Kyverno-vs-Helm delimiter
+      collision (both use doubled braces, and Helm parses them even inside a YAML comment). The
+      NotIn selector also matches workloads carrying no queue label at all - what a Kubernetes
+      label selector does for an absent key - so the two rules are exhaustive and order-independent.
+
+      Both Pod and SparkApplication are matched: a tenant sets the queue label on the
+      SparkApplication itself, and Kueue reads the priority label from the same object it reads
+      the queue name from.
+    */}}
+    - name: high-lane-queue-priority
       match:
         any:
           - resources:
               kinds:
                 - Pod
-              operations:
-                - CREATE
-              namespaceSelector:
-                matchLabels:
-                  platform.namespace-role: airflow
-      exclude:
-        {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
-      mutate:
-        patchStrategicMerge:
-          spec:
-            +(priorityClassName): {{ .Values.priorityClasses.tenantAirflow.name }}
-    # The lane a tenant picked and the PriorityClass the pod carries have to agree. They are
-    # separate mechanisms - the LocalQueue decides which pool of quota the work draws from, the
-    # PriorityClass decides scheduling order and who gets preempted - and a tenant setting one
-    # without the other (or setting them to disagree) is the obvious way to end up with
-    # "high-priority" work that is last in line. So the platform derives the class FROM the lane
-    # rather than asking tenants to keep two fields in sync.
-    #
-    # Split across two rules matched by label selector rather than one rule with a JMESPath
-    # precondition: a selector needs no inline expression, so this file stays free of the
-    # Kyverno-vs-Helm delimiter collision (both use the same doubled braces, and Helm parses
-    # them even inside a YAML comment - which is how this very comment broke the render once).
-    # The NotIn selector below also matches pods carrying no
-    # queue-name label at all, which is what a Kubernetes label selector does for an absent key -
-    # so the two rules are exhaustive and, importantly, order-independent.
-    - name: default-high-lane-priority
-      match:
-        any:
-          - resources:
-              kinds:
-                - Pod
+                - SparkApplication
               operations:
                 - CREATE
               namespaceSelector:
@@ -83,14 +67,16 @@ spec:
         {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
       mutate:
         patchStrategicMerge:
-          spec:
-            +(priorityClassName): {{ .Values.priorityClasses.tenantWorkloadHigh.name }}
-    - name: default-workload-priority
+          metadata:
+            labels:
+              +(kueue.x-k8s.io/priority-class): {{ .Values.workloadPriorityClasses.high.name }}
+    - name: default-queue-priority
       match:
         any:
           - resources:
               kinds:
                 - Pod
+                - SparkApplication
               operations:
                 - CREATE
               namespaceSelector:
@@ -105,7 +91,8 @@ spec:
         {{- include "cluster-governance.excludeBlock" . | nindent 8 }}
       mutate:
         patchStrategicMerge:
-          spec:
-            # Low, not high: work nobody explicitly put in the high lane is work nobody has
-            # claimed is urgent. A tenant that wants the guaranteed lane asks for it by name.
-            +(priorityClassName): {{ .Values.priorityClasses.tenantWorkloadLow.name }}
+          metadata:
+            labels:
+              # Low, not high: work nobody explicitly put in the guaranteed lane is work nobody
+              # has claimed is urgent.
+              +(kueue.x-k8s.io/priority-class): {{ .Values.workloadPriorityClasses.low.name }}

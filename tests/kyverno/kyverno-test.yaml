@@ -77,6 +77,11 @@ results:
     result: pass
     resources:
       - compliant-task
+      # Names no PriorityClass at all. Nothing defaults one any more, so this is what an ordinary
+      # tenant pod looks like - and it must pass. Requiring the field here (as this rule did while
+      # a mutate rule still supplied it) would reject every tenant workload.
+      - unprioritised-task
+      - high-lane-task
   - policy: tenant-scheduling-bounds
     rule: deny-node-pinning
     kind: Pod
@@ -135,31 +140,24 @@ results:
     resources:
       - compliant-task
 
-  # --- priority defaulting (mutate) -------------------------------------------------------------
-  # A pod that names no PriorityClass must come out of admission with one, chosen by what the
-  # namespace is for. Asserted against the patched resource, not just "the rule ran": the failure
-  # that matters here is the two namespace roles being wired to the wrong classes, which produces
-  # a perfectly valid pod that simply outranks things it should not.
-  - policy: tenant-default-priority-class
-    rule: default-workload-priority
-    kind: Pod
-    result: pass
-    resources:
-      - unprioritised-task
-    patchedResources: resources/patched-priority.yaml
-  - policy: tenant-default-priority-class
-    rule: default-high-lane-priority
+  # --- queue priority defaulting (mutate) --------------------------------------------------------
+  # A workload that names no Kueue priority must come out of admission with one, chosen by the
+  # lane it was submitted to. Asserted against the patched resource, not just "the rule ran": the
+  # failure that matters is the two lanes being wired to the wrong classes, which yields a valid
+  # workload that simply queues in the wrong order.
+  - policy: tenant-default-queue-priority
+    rule: high-lane-queue-priority
     kind: Pod
     result: pass
     resources:
       - high-lane-task
     patchedResources: resources/patched-priority.yaml
-  - policy: tenant-default-priority-class
-    rule: default-airflow-control-plane-priority
+  - policy: tenant-default-queue-priority
+    rule: default-queue-priority
     kind: Pod
     result: pass
     resources:
-      - unprioritised-airflow-component
+      - unprioritised-task
     patchedResources: resources/patched-priority.yaml
 
   # --- services -------------------------------------------------------------------------------

@@ -33,7 +33,13 @@ priorityClasses:
     name: tenant-airflow
     value: 100000
     description: "A tenant's Airflow control plane - scheduler, dag-processor, api-server, triggerer, metadata DB."
-  # Tenant batch work, high lane.
+  # Tenant batch work, high lane. NOTE: since priority defaulting moved to Kueue's
+  # WorkloadPriorityClass (see workloadPriorityClasses below), nothing assigns these two classes
+  # automatically any more. They remain because a tenant MAY name one explicitly on a workload,
+  # and policy.scheduling.allowedTenantPriorityClasses is what keeps that choice inside the tenant
+  # range. A tenant pod naming none gets pod priority 0 - below tenant-airflow and far below
+  # platform-critical - so platform components still outrank tenant work, which is the property
+  # that actually has to hold.
   tenantWorkloadHigh:
     name: tenant-workload-high
     value: 1000
@@ -46,6 +52,36 @@ priorityClasses:
     value: 100
     preemptionPolicy: Never
     description: "Tenant batch work submitted to the tenant's low-priority (opportunistic) Kueue queue."
+
+# --- Kueue queueing priority ------------------------------------------------------------------
+# Kueue's OWN priority concept, separate from the PriorityClasses above, and the one that decides
+# queue ordering and who gets preempted when the high lane reclaims capacity.
+#
+# Why this exists rather than reusing the pod's PriorityClass, which was the original design:
+# `spec.priorityClassName` cannot be set by an admission webhook. Kubernetes' built-in Priority
+# admission plugin owns that field - it stamps the matching integer into `spec.priority` and then
+# refuses any pod whose integer disagrees with its class name. A webhook that sets the name after
+# the integer has been stamped produces exactly that mismatch, and the pod is rejected outright:
+#
+#   pods "x" is forbidden: the integer value of priority (0) must not be provided in pod spec;
+#   priority admission controller computed 1000 from the given PriorityClass name
+#
+# Confirmed on a real cluster by governance-kind. Every fixture test passed beforehand, because
+# the Kyverno CLI does not run Kubernetes' built-in admission chain - only a live API server does.
+#
+# WorkloadPriorityClass is selected by a LABEL (kueue.x-k8s.io/priority-class), and labels have no
+# built-in plugin defending them, so the platform can safely set it from the lane a tenant chose.
+# It is the better fit on its own terms too: this is queueing priority, which is Kueue's business,
+# where a pod's PriorityClass is the kube-scheduler's.
+workloadPriorityClasses:
+  high:
+    name: tenant-high
+    value: 10000
+    description: "Tenant work in the guaranteed lane - preempts low-lane work when reclaiming quota."
+  low:
+    name: tenant-low
+    value: 100
+    description: "Tenant work in the opportunistic lane - the first thing evicted when quota is reclaimed."
 
 # --- Kueue topology --------------------------------------------------------------------------
 kueue:

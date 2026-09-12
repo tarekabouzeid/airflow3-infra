@@ -298,22 +298,27 @@ jobs:
           kubectl -n "${TENANT_NS}" wait --for=condition=Ready pod/admitted-task --timeout=180s
           echo "Pod was admitted through the queue and is running."
 
-      - name: 'Kueue: the mutate rule defaulted the PriorityClass'
+      - name: 'Kueue: the lane decided the queueing priority'
         run: |
           set -euo pipefail
-          # admitted-task carries kueue.x-k8s.io/queue-name: high and names NO PriorityClass, so
-          # the lane is the only input the platform has. Asserting "high" here is the real check:
-          # the earlier version of this step expected tenant-workload-low, which was correct only
-          # while the rule ignored the lane - exactly the lane/priority mismatch the rule exists
-          # to prevent.
-          actual=$(kubectl -n "${TENANT_NS}" get pod admitted-task -o jsonpath='{.spec.priorityClassName}')
-          echo "admitted-task (queue-name: high) priorityClassName=${actual}"
-          [ "${actual}" = "tenant-workload-high" ] || {
-            echo "::error::Expected the high lane to yield tenant-workload-high, got '${actual}'."
+          # The lane a tenant picks must decide Kueue's queueing priority. This asserts the LABEL,
+          # not spec.priorityClassName: an earlier version of the policy set the pod's own
+          # PriorityClass and was rejected outright by Kubernetes' Priority admission plugin
+          # ("the integer value of priority (0) must not be provided in pod spec"), which is the
+          # failure this very step surfaced.
+          actual=$(kubectl -n "${TENANT_NS}" get pod admitted-task \
+            -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/priority-class}')
+          echo "admitted-task (queue-name: high) kueue priority-class=${actual}"
+          [ "${actual}" = "tenant-high" ] || {
+            echo "::error::Expected the high lane to yield the tenant-high WorkloadPriorityClass, got '${actual}'."
+            kubectl -n "${TENANT_NS}" get pod admitted-task -o jsonpath='{.metadata.labels}' | tr ',' '\n'
             exit 1
           }
 
-          # And the other half of the pair: no queue label at all must fall to the low lane.
+          # And the other half of the pair: no queue label at all must fall to the low lane. This
+          # pod also names no PriorityClass, which is what an ordinary tenant pod looks like now
+          # that nothing defaults one - so it doubles as a check that the allowlist rule does not
+          # reject a pod for staying silent.
           kubectl -n "${TENANT_NS}" apply -f - <<'EOF'
           apiVersion: v1
           kind: Pod
@@ -335,12 +340,17 @@ jobs:
                   capabilities: {drop: ["ALL"]}
                   seccompProfile: {type: RuntimeDefault}
           EOF
-          unlabelled=$(kubectl -n "${TENANT_NS}" get pod unlabelled-task -o jsonpath='{.spec.priorityClassName}')
-          echo "unlabelled-task priorityClassName=${unlabelled}"
-          [ "${unlabelled}" = "tenant-workload-low" ] || {
-            echo "::error::Expected an unlabelled pod to default to tenant-workload-low, got '${unlabelled}'."
+          unlabelled=$(kubectl -n "${TENANT_NS}" get pod unlabelled-task \
+            -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/priority-class}')
+          echo "unlabelled-task kueue priority-class=${unlabelled}"
+          [ "${unlabelled}" = "tenant-low" ] || {
+            echo "::error::Expected an unlabelled workload to default to the tenant-low WorkloadPriorityClass, got '${unlabelled}'."
             exit 1
           }
+
+          # And Kueue must have picked that priority up on the Workload it built for the pod.
+          kubectl -n "${TENANT_NS}" get workloads.kueue.x-k8s.io \
+            -o custom-columns='NAME:.metadata.name,QUEUE:.spec.queueName,PRIORITYCLASS:.spec.priorityClassRef.name,PRIORITY:.spec.priority'
 
       - name: 'Kueue: work beyond the queue quota is held, not run'
         run: |

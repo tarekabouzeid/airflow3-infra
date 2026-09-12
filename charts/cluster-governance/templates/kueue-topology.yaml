@@ -61,3 +61,16 @@ spec:
   # nominalQuota. See values.yaml (kueue.cohort.quota) for when to set one.
   resourceGroups: []
   {{- end }}
+{{- range $lane := (list "high" "low") }}
+{{- $wpc := index $.Values.workloadPriorityClasses $lane }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: WorkloadPriorityClass
+metadata:
+  name: {{ $wpc.name }}
+  labels:
+    {{- include "cluster-governance.labels" $ | nindent 4 }}
+    platform.queue-lane: {{ $lane }}
+value: {{ $wpc.value }}
+description: {{ $wpc.description | quote }}
+{{- end }}

@@ -46,16 +46,59 @@ mutating webhook in the path of every tenant pod creation. Kubernetes 1.32's bui
 but `MutatingAdmissionPolicy` is still alpha there — and since the mutation forces a webhook
 regardless, splitting the rules across two engines buys nothing.
 
-## Priority: one ladder, not two
+## Priority: two mechanisms, each used for what it is for
 
 There are two priority concepts in play and they are easy to conflate:
 
 - A Kubernetes **`PriorityClass`** drives kube-scheduler preemption and kubelet eviction order.
 - A Kueue **`WorkloadPriorityClass`** drives queue ordering and preemption *inside* Kueue.
 
-This platform deliberately uses only the first. Absent an explicit `kueue.x-k8s.io/priority-class`
-label, Kueue derives a Workload's priority from the pod's own `PriorityClass` value — so one
-ladder is honoured by both systems, and there is no way for them to disagree:
+The original design here used only the first, on the theory that one ladder honoured by both
+systems cannot disagree with itself. **That does not work, and it is worth knowing why**, because
+it looks correct right up until it reaches a real cluster.
+
+`spec.priorityClassName` cannot be set by an admission webhook. Kubernetes' built-in Priority
+admission plugin owns that field: it resolves the class name to an integer, stamps it into
+`spec.priority`, and rejects any pod whose integer disagrees with its name. A webhook that changes
+the name after the integer is stamped creates exactly that disagreement:
+
+```
+pods "admitted-task" is forbidden: the integer value of priority (0) must not be provided in
+pod spec; priority admission controller computed 1000 from the given PriorityClass name
+```
+
+Every fixture test passed before this surfaced, because the Kyverno CLI does not run Kubernetes'
+built-in admission chain. Only `governance-kind`, against a live API server, showed it.
+
+So the two mechanisms are now used for what each is actually for:
+
+- **Queueing priority** — which of a tenant's workloads Kueue admits first, and whose work the
+  high lane preempts when it reclaims quota — is a **`WorkloadPriorityClass`**, selected by the
+  `kueue.x-k8s.io/priority-class` **label**. Labels have no built-in plugin defending them, so the
+  platform sets it from the lane the tenant chose. Tenants still set exactly one field.
+- **Scheduling priority** — who the kube-scheduler places first and who the kubelet evicts under
+  node pressure — stays a **`PriorityClass`**, set in each component's own pod spec by the chart
+  that owns it. Nothing mutates it onto a tenant pod.
+
+A tenant pod that names no `PriorityClass` gets pod priority 0, which is below `tenant-airflow`
+and far below `platform-critical` — so platform components still outrank tenant work, which is the
+property that actually has to hold. The allowlist rule bounds what a tenant *may* name; it no
+longer requires them to name anything.
+
+| Class | Value | Who gets it | How |
+|---|---:|---|---|
+| `platform-critical` | 1000000 | Argo CD, Vault, ESO, Spark Operator, Kueue, Kyverno | its own chart values |
+| `tenant-airflow` | 100000 | A tenant's Airflow control plane | its own chart values |
+| `tenant-workload-high` / `-low` | 1000 / 100 | A tenant workload that names one explicitly | opt-in, bounded by the allowlist |
+
+And the Kueue side, set automatically from the lane:
+
+| WorkloadPriorityClass | Value | Assigned to |
+|---|---:|---|
+| `tenant-high` | 10000 | workloads labelled `kueue.x-k8s.io/queue-name: high` |
+| `tenant-low` | 100 | everything else in a tenant workload namespace |
+
+The old PriorityClass ladder, for reference:
 
 | Class | Value | Who gets it |
 |---|---:|---|
@@ -66,7 +109,7 @@ ladder is honoured by both systems, and there is no way for them to disagree:
 
 None is `globalDefault`. A cluster-wide default cannot tell a tenant's scheduler from a tenant's
 Spark executor, and getting that backwards means a batch task outranking the scheduler that
-launched it. Defaulting is done per namespace by Kyverno instead.
+launched it.
 
 `tenant-workload-low` sets `preemptionPolicy: Never`: a low-priority pod may be preempted, but
 must never itself trigger an eviction. Without it, a large enough burst of low-priority pods could
@@ -136,10 +179,10 @@ tenant namespaces, all currently `failureAction: Audit`.
 |---|---|
 | `tenant-restrict-image-registries` | Images outside the allowlist; images with no tag or a `:latest` tag |
 | `tenant-container-resource-bounds` | A container missing CPU/memory requests or limits, or exceeding the per-container ceiling (4 CPU / 8Gi) |
-| `tenant-scheduling-bounds` | A `PriorityClass` outside the tenant set; `spec.nodeName`; control-plane tolerations; host ports |
+| `tenant-scheduling-bounds` | A `PriorityClass` outside the tenant set (when one is named at all); `spec.nodeName`; control-plane tolerations; host ports |
 | `tenant-pod-security` | Violations of the `restricted` Pod Security Standard, minus Seccomp/Capabilities for the platform's own images |
 | `tenant-restrict-service-types` | `NodePort` and `LoadBalancer` Services |
-| `tenant-default-priority-class` | *(mutate)* Sets `priorityClassName` from the namespace role and queue lane |
+| `tenant-default-queue-priority` | *(mutate)* Sets the `kueue.x-k8s.io/priority-class` label from the queue lane |
 
 The per-container ceiling is a different question from the namespace `ResourceQuota`. A quota caps
 a tenant's *total*; one pod asking for the entire quota satisfies it perfectly while starving every

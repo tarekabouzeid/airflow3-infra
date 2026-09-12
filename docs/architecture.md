@@ -246,14 +246,23 @@ Governance forced the wave layout to grow: `1` operators (ESO, Spark Operator, K
 Wave 2 has to precede wave 3 because Kyverno mutates a `PriorityClass` onto every tenant pod and a
 pod naming a class that does not yet exist is rejected outright.
 
-### One priority ladder, not two
+### Two priority mechanisms, each used for what it is for
 
-Kueue has its own `WorkloadPriorityClass` concept, and this platform deliberately does not use it.
-Absent an explicit priority label, Kueue derives a Workload's queueing priority from the pod's
-ordinary Kubernetes `PriorityClass` — so `platform-critical` > `tenant-airflow` >
-`tenant-workload-high` > `tenant-workload-low` is one ladder honoured by both the kube-scheduler
-and Kueue, rather than two that can silently disagree. Kyverno derives the class from the queue
-lane the tenant chose, so a tenant sets one field and the two cannot be made inconsistent.
+Queueing priority (what Kueue admits first, and whose work the high lane preempts) is a Kueue
+`WorkloadPriorityClass`, selected by the `kueue.x-k8s.io/priority-class` label and set by Kyverno
+from the lane the tenant chose. Scheduling priority (kube-scheduler placement, kubelet eviction)
+stays an ordinary `PriorityClass`, set in each component's own pod spec by the chart that owns it.
+
+The original design used a single ladder for both, with Kyverno mutating the pod's own
+`priorityClassName`. That is not possible: Kubernetes' built-in Priority admission plugin owns
+that field, stamping the resolved integer into `spec.priority` and rejecting any pod whose integer
+disagrees with its name — which is exactly what a webhook changing the name after the fact
+produces. Every rendered-manifest and fixture check passed; only `governance-kind`, against a live
+API server, caught it. See `docs/runbook-governance.md` for the error and the reasoning.
+
+A tenant pod naming no `PriorityClass` therefore has pod priority 0, below `tenant-airflow` and far
+below `platform-critical` — so platform components still outrank tenant work, which is the
+property that has to hold.
 
 ### What is not queued, and why
 

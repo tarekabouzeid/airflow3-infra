@@ -271,6 +271,64 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 ---
+# Tolerating the control-plane taint is a way onto nodes that are not tenant capacity. Inert on
+# this lab's single-node untainted KIND clusters, which is exactly why it needs a test - nothing
+# in the running system would ever exercise it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tolerates-control-plane
+  namespace: tenant-a-workloads
+spec:
+  priorityClassName: tenant-workload-low
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: task
+      image: apache/spark:4.0.4
+      resources:
+        requests: {cpu: "100m", memory: 128Mi}
+        limits: {cpu: "1", memory: 1Gi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+---
+# No priorityClassName at all - what an Airflow KubernetesPodOperator task looks like unless the
+# DAG author goes out of their way. The mutate rule is what stops this being an unranked pod.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: unprioritised-task
+  namespace: tenant-a-workloads
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: task
+      image: apache/spark:4.0.4
+      resources:
+        requests: {cpu: "100m", memory: 128Mi}
+        limits: {cpu: "1", memory: 1Gi}
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+---
 # The same omission, but in the tenant's AIRFLOW namespace - which must get the much higher
 # tenant-airflow class instead. Getting this backwards would let a Spark executor outrank the
 # scheduler that launched it.
